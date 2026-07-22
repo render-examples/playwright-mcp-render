@@ -5,6 +5,9 @@
 # Bump the tag in lockstep with render.yaml when rolling Playwright MCP.
 FROM mcr.microsoft.com/playwright/mcp:v0.0.77
 
+# --chmod guarantees the executable bit regardless of the host checkout's file
+# mode (e.g. Windows/CRLF clones); it requires BuildKit, enabled by the syntax
+# directive above (Render builds with BuildKit).
 COPY --chmod=0755 render-entrypoint.sh /usr/local/bin/render-entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/render-entrypoint.sh"]

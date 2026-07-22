@@ -12,13 +12,15 @@
 #                        disk, obvious internal origins are blocked, service
 #                        workers are off, and navigation/action timeouts are tight.
 #
-# Both profiles read the port from $PORT (Render sets it) and scope the server's
-# host check to this service's own hostname via $RENDER_EXTERNAL_HOSTNAME
-# (Render sets it automatically), falling back to "*" for local runs.
+# Both profiles read the port from $PORT (Render sets it) and, by default, scope
+# the server's host check to this service's own hostname via
+# $RENDER_EXTERNAL_HOSTNAME (Render sets it automatically), falling back to "*"
+# for local runs. Set PLAYWRIGHT_MCP_ALLOWED_HOSTS to override — e.g. to add a
+# custom domain (comma-separated) or to pass "*" to disable the host check.
 set -eu
 
 PORT="${PORT:-10000}"
-ALLOWED_HOSTS="${RENDER_EXTERNAL_HOSTNAME:-*}"
+ALLOWED_HOSTS="${PLAYWRIGHT_MCP_ALLOWED_HOSTS:-${RENDER_EXTERNAL_HOSTNAME:-*}}"
 
 # Match DEMO case-insensitively and accept common truthy spellings, so a value
 # typed straight into the Render dashboard ("True", "yes", "on") can't silently

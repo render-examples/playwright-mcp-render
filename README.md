@@ -53,7 +53,7 @@ Everything is set in [`render.yaml`](./render.yaml); [`.env.example`](./.env.exa
 | `PORT` | `10000` | Port the MCP transport binds to; Render routes to it. |
 | `DEMO` | `false` | See [Demo mode](#demo-mode). Off = full server. Plain value, not a secret. |
 
-The entrypoint also scopes the server's host check to your service's own hostname automatically via Render's `RENDER_EXTERNAL_HOSTNAME`.
+The entrypoint scopes the server's host check to your service's own `onrender.com` hostname automatically via Render's `RENDER_EXTERNAL_HOSTNAME`. **If you add a [custom domain](https://render.com/docs/custom-domains)**, requests to it will be rejected by the host check until you set `PLAYWRIGHT_MCP_ALLOWED_HOSTS` (comma-separated, e.g. `myapp.com,myapp.onrender.com`; `*` disables the check).
 
 The browser session is **stateless and ephemeral** — no profile is persisted between requests. If you want a persistent Chromium profile (saved logins, cookies), attach a [Render Disk](https://render.com/docs/disks) and add `--user-data-dir <mount-path>` to `render-entrypoint.sh`.
 
