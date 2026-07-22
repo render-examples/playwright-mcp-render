@@ -2,7 +2,7 @@
 
 Deploy [Playwright MCP](https://github.com/microsoft/playwright-mcp) on Render in one click. Get a hosted, headless-Chromium [MCP](https://modelcontextprotocol.io) server your AI tools can drive over HTTP — no local browser install, no `npx` on every machine.
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Ho1yShif/playwright-mcp/tree/render-template)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/Ho1yShif/playwright-mcp)
 
 ## What it does
 
