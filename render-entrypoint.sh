@@ -22,6 +22,11 @@ set -eu
 PORT="${PORT:-10000}"
 ALLOWED_HOSTS="${PLAYWRIGHT_MCP_ALLOWED_HOSTS:-${RENDER_EXTERNAL_HOSTNAME:-*}}"
 
+# Upstream's own startup banner prints "http://localhost:$PORT/mcp", which is
+# misleading on Render. Print the real public URL first so anyone copy-pasting
+# from the logs gets the right endpoint.
+echo "[startup] Connect MCP clients to: https://${RENDER_EXTERNAL_HOSTNAME:-localhost:$PORT}/mcp"
+
 # Match DEMO case-insensitively and accept common truthy spellings, so a value
 # typed straight into the Render dashboard ("True", "yes", "on") can't silently
 # fall through to the full server.
