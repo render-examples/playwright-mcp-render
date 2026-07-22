@@ -20,8 +20,11 @@ set -eu
 PORT="${PORT:-10000}"
 ALLOWED_HOSTS="${RENDER_EXTERNAL_HOSTNAME:-*}"
 
-case "${DEMO:-false}" in
-  true | TRUE | 1)
+# Match DEMO case-insensitively and accept common truthy spellings, so a value
+# typed straight into the Render dashboard ("True", "yes", "on") can't silently
+# fall through to the full server.
+case "$(printf '%s' "${DEMO:-false}" | tr '[:upper:]' '[:lower:]')" in
+  true | 1 | yes | on)
     echo "[startup] DEMO mode enabled — public, locked-down, per-connection isolated browser sessions"
     exec node /app/cli.js \
       --headless --browser chromium --no-sandbox \
