@@ -10,7 +10,7 @@ https://github.com/user-attachments/assets/0f31c279-f2e0-431f-a854-50677bd800c5
 
 [Playwright MCP](https://github.com/microsoft/playwright-mcp) is a Model Context Protocol server that lets an LLM open a real browser, navigate, click, type, and read pages through structured accessibility snapshots (not screenshots). It normally runs locally via `npx @playwright/mcp`. This template runs it as a single Render web service instead, so any MCP client can connect to a shared HTTPS URL.
 
-It's a **thin wrapper** over the official `mcr.microsoft.com/playwright/mcp` image (headless Chromium already baked in) — no source changes. The wrapper adds only the flags Render needs (`--headless`, `--no-sandbox`, `--host 0.0.0.0`).
+It's a **thin wrapper** over the official `mcr.microsoft.com/playwright/mcp` image (headless Chromium already baked in) — no source changes. The wrapper adds only the flags Render needs (`--headless`, `--no-sandbox`, `--host 0.0.0.0`, plus `--port` and `--allowed-hosts` from the environment).
 
 > **Restrict access before you deploy.** Playwright MCP has no authentication in HTTP mode, and it ships an RCE-equivalent tool. Anyone who learns the URL can run code in your container. See [Security](#security).
 
@@ -170,7 +170,7 @@ The version is pinned in exactly one place: the base-image tag in [`Dockerfile.r
 
 Then re-check the two claims in [Security](#security) against the new tag's upstream README: whether `browser_run_code_unsafe` is still a non-opt-in **Core automation** tool, and whether `--caps` still only _adds_ capabilities. Update that section's permalink to the new tag either way — it's the only other place a version literal appears, because a permalink has to carry one.
 
-> **Not** a version to keep in sync: the `version` field in `package.json`. This repo is a fork of [microsoft/playwright-mcp](https://github.com/microsoft/playwright-mcp), so that field is upstream's release marker for the vendored source — and the deploy never builds from it (`Dockerfile.render` copies only `render-entrypoint.sh`). Expect it to differ from the image tag; leave it alone.
+> **Not** a version to keep in sync: the `version` field in `package.json`. This repo is a fork of [microsoft/playwright-mcp](https://github.com/microsoft/playwright-mcp), so that field is upstream's own npm release marker — and the deploy never uses it (`Dockerfile.render` copies only `render-entrypoint.sh`). Expect it to differ from the image tag; leave it alone.
 
 ---
 
