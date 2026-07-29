@@ -46,7 +46,7 @@ One Render web service runs the official Playwright MCP image with a thin entryp
 **Key properties:**
 
 - **Thin wrapper, no fork of the tool.** The Playwright MCP version is pinned by the base-image tag in `Dockerfile.render`; upgrades are a one-line tag bump (see [Rolling Playwright MCP](#rolling-playwright-mcp)).
-- **No database, no disk, no secrets** to configure. The browser does keep state, though: Playwright MCP's default is a **persistent profile**, so cookies and logins carry across requests — and across clients — for the life of the instance (see [Configuration](#configuration)).
+- **No database, no disk, no secrets** to configure. The browser keeps upstream's default **persistent profile**, so logins carry across requests for the life of the instance — convenient for a server that's yours alone, which is what this template assumes (see [Configuration](#configuration)).
 - **No authentication.** Playwright MCP has no auth in HTTP mode, so restricting who can reach the service is on you (see [Security](#security)).
 
 ## Prerequisites
@@ -139,8 +139,8 @@ The entrypoint scopes the server's host check to your service's own `onrender.co
 
 The entrypoint passes no profile flags, so you get Playwright MCP's default: a **persistent profile** on the container's filesystem (`~/.cache/ms-playwright/mcp-*`). Two consequences worth knowing:
 
-- **State carries across requests, and across clients.** Cookies and logged-in sessions survive between calls, and every client reaching the URL shares the same profile. It is wiped on restart or redeploy — the container filesystem is ephemeral — but not between visitors.
-- **Concurrent clients can conflict.** Upstream notes a persistent profile "can only be used by one browser instance at a time," so parallel clients may collide.
+- **Logins survive between calls — usually what you want.** Authenticate once through the hosted browser and later sessions reuse the session. Every client pointed at the URL shares that one profile, so this assumes the service is yours (see [Security](#security)). No Disk is attached, so the profile is wiped on restart or redeploy.
+- **Concurrent clients can conflict.** Upstream notes a persistent profile "can only be used by one browser instance at a time, so concurrent MCP clients sharing the same workspace will conflict" — so two editors on one URL may collide. Scaling past one instance also gives each instance its own profile.
 
 To change either, edit `render-entrypoint.sh`:
 
@@ -173,7 +173,7 @@ Pinned to `v0.0.78` in **two** places — keep them in lockstep:
 
 To bump, change the tag in `Dockerfile.render`, commit, and redeploy. (`runtime: docker` images don't auto-deploy when a tag moves — a fresh deploy pulls the new base.)
 
-While rolling, re-check the two claims in [Security](#security) against the new tag's upstream README: whether `browser_run_code_unsafe` is still a non-opt-in **Core automation** tool, and whether `--caps` still only _adds_ capabilities. Update the pinned links in that section to the new tag either way.
+While rolling, re-check the two claims in [Security](#security) against the new tag's upstream README: whether `browser_run_code_unsafe` is still a non-opt-in **Core automation** tool, and whether `--caps` still only _adds_ capabilities. Update the pinned link in that section to the new tag either way.
 
 ---
 

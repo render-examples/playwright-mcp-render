@@ -1,7 +1,8 @@
 #!/bin/sh
 # Render entrypoint for Playwright MCP.
 #
-# Starts the full server: every capability enabled, no origin limits.
+# Starts Playwright MCP with only the flags Render needs — no capability,
+# origin, or timeout limits are applied on top of upstream's defaults.
 #
 # Playwright MCP ships no authentication in HTTP mode, so anyone who can reach
 # the URL can run code in this container. Restricting access is the operator's
