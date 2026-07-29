@@ -25,9 +25,3 @@ services:
       # Render routes external traffic to this port; the entrypoint binds to it.
       - key: PORT
         value: 10000
-      # DEMO mode is OFF by default: a fork gets the full, all-capabilities server.
-      # Flip to "true" ONLY on a public demo you host yourself — it enables a
-      # locked-down, per-connection-isolated, SSRF-guarded browser session.
-      # Plain value (not a secret). See the README "Demo mode" and "Security" notes.
-      - key: DEMO
-        value: "false"
