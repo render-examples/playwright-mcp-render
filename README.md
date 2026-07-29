@@ -36,17 +36,17 @@ One Render web service runs the official Playwright MCP image with a thin entryp
 
 **How a deploy is assembled:**
 
-| File                                             | Role                                                                                                                                                 |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [`render.yaml`](./render.yaml)                   | Blueprint. Declares the single Docker web service, its plan/region, and the `PORT` env var. This is what the Deploy button reads.                    |
-| [`Dockerfile.render`](./Dockerfile.render)       | Thin wrapper over `mcr.microsoft.com/playwright/mcp` (headless Chromium pre-baked). Adds only the entrypoint — no browser download, no source build. |
-| [`render-entrypoint.sh`](./render-entrypoint.sh) | PID 1. Reads `PORT`, resolves the allowed-hosts value, then `exec`s `node /app/cli.js` with the flags Render needs.                                  |
-| [`.env.example`](./.env.example)                 | Documents the same knobs for running the container locally.                                                                                          |
+| File | Role |
+|------|------|
+| [`render.yaml`](./render.yaml) | Blueprint. Declares the single Docker web service, its plan/region, and the `PORT` env var. This is what the Deploy button reads. |
+| [`Dockerfile.render`](./Dockerfile.render) | Thin wrapper over `mcr.microsoft.com/playwright/mcp` (headless Chromium pre-baked). Adds only the entrypoint — no browser download, no source build. |
+| [`render-entrypoint.sh`](./render-entrypoint.sh) | PID 1. Reads `PORT`, resolves the allowed-hosts value, then `exec`s `node /app/cli.js` with the flags Render needs. |
+| [`.env.example`](./.env.example) | Documents the same knobs for running the container locally. |
 
 **Key properties:**
 
 - **Thin wrapper, no fork of the tool.** The Playwright MCP version is pinned by the base-image tag in `Dockerfile.render`; upgrades are a one-line tag bump (see [Rolling Playwright MCP](#rolling-playwright-mcp)).
-- **Stateless.** No database, no disk, no secrets. Each request drives an ephemeral browser context; nothing persists between requests (unless you attach a [Disk](https://render.com/docs/disks) — see [Configuration](#configuration)).
+- **No database, no disk, no secrets** to configure. The browser does keep state, though: Playwright MCP's default is a **persistent profile**, so cookies and logins carry across requests — and across clients — for the life of the instance (see [Configuration](#configuration)).
 - **No authentication.** Playwright MCP has no auth in HTTP mode, so restricting who can reach the service is on you (see [Security](#security)).
 
 ## Prerequisites
@@ -127,15 +127,27 @@ Prefer to skip Docker entirely? Upstream runs the same server directly: `npx @pl
 
 Everything is set in [`render.yaml`](./render.yaml); [`.env.example`](./.env.example) documents the same knobs for running locally.
 
-| Env var | Default | What it's for                                         |
-| ------- | ------- | ----------------------------------------------------- |
-| `PORT`  | `10000` | Port the MCP transport binds to; Render routes to it. |
+| Env var | Default | What it's for |
+|---------|---------|---------------|
+| `PORT` | `10000` | Port the MCP transport binds to; Render routes to it. |
 
 `.env.example` also lists `PLAYWRIGHT_MCP_HOST`, `PLAYWRIGHT_MCP_HEADLESS`, and `PLAYWRIGHT_MCP_NO_SANDBOX`. These matter only when you run the server **directly** (outside this image) — on Render, `render-entrypoint.sh` always passes the equivalent CLI flags, and CLI flags win, so setting them in the Render dashboard has no effect. The one exception is `PLAYWRIGHT_MCP_ALLOWED_HOSTS`, which the entrypoint does honor.
 
 The entrypoint scopes the server's host check to your service's own `onrender.com` hostname automatically via Render's `RENDER_EXTERNAL_HOSTNAME`. **If you add a [custom domain](https://render.com/docs/custom-domains)**, requests to it will be rejected by the host check until you set `PLAYWRIGHT_MCP_ALLOWED_HOSTS` (comma-separated, e.g. `myapp.com,myapp.onrender.com`; `*` disables the check).
 
-The browser session is **stateless and ephemeral** — no profile is persisted between requests. If you want a persistent Chromium profile (saved logins, cookies), attach a [Render Disk](https://render.com/docs/disks) and add `--user-data-dir <mount-path>` to `render-entrypoint.sh`.
+### Browser profile state
+
+The entrypoint passes no profile flags, so you get Playwright MCP's default: a **persistent profile** on the container's filesystem (`~/.cache/ms-playwright/mcp-*`). Two consequences worth knowing:
+
+- **State carries across requests, and across clients.** Cookies and logged-in sessions survive between calls, and every client reaching the URL shares the same profile. It is wiped on restart or redeploy — the container filesystem is ephemeral — but not between visitors.
+- **Concurrent clients can conflict.** Upstream notes a persistent profile "can only be used by one browser instance at a time," so parallel clients may collide.
+
+To change either, edit `render-entrypoint.sh`:
+
+| Want | Add |
+|------|-----|
+| A fresh in-memory profile per session, discarded on close | `--isolated` |
+| A profile that survives redeploys (saved logins) | a [Render Disk](https://render.com/docs/disks) plus `--user-data-dir <mount-path>` |
 
 ## Security
 
@@ -150,7 +162,7 @@ Pick the option that matches how you'll connect:
 
 **If you can do neither**, understand what you're running: the URL is the only thing standing between the internet and code execution in your container. Treat it as a credential, don't publish it, keep an eye on the service's metrics and logs, and suspend or delete the service when you're done with it. That is a weak control, not a good one.
 
-The entrypoint scopes the server's host check to your own `onrender.com` hostname automatically. That is a Host-header check to prevent DNS rebinding — it is **not** access control and does nothing to stop a direct request to your URL.
+The host check the entrypoint sets up (see [Configuration](#configuration)) is a Host-header check against DNS rebinding — **not** access control. It does nothing to stop a direct request to your URL.
 
 ## Rolling Playwright MCP
 

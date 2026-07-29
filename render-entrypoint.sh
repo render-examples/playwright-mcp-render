@@ -1,12 +1,11 @@
 #!/bin/sh
 # Render entrypoint for Playwright MCP.
 #
-# One profile: the full server, every capability enabled, no origin limits.
-# Playwright MCP ships no authentication in HTTP mode, so this is meant to run
-# with access restricted — behind inbound IP rules, behind your own auth proxy,
-# or as a Render private service if the client is another Render service. Anyone
-# who can reach the URL can run code in this container. See the README
-# "Security" section.
+# Starts the full server: every capability enabled, no origin limits.
+#
+# Playwright MCP ships no authentication in HTTP mode, so anyone who can reach
+# the URL can run code in this container. Restricting access is the operator's
+# job — see the README "Security" section.
 #
 # The port comes from $PORT (Render sets it) and, by default, the server's host
 # check is scoped to this service's own hostname via $RENDER_EXTERNAL_HOSTNAME
