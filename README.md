@@ -166,14 +166,11 @@ The host check the entrypoint sets up (see [Configuration](#configuration)) is a
 
 ## Rolling Playwright MCP
 
-Pinned to `v0.0.78` in **two** places — keep them in lockstep:
+The version is pinned in exactly one place: the base-image tag in [`Dockerfile.render`](./Dockerfile.render). To bump, change that tag, commit, and redeploy. (`runtime: docker` images don't auto-deploy when a tag moves — a fresh deploy pulls the new base.)
 
-- `image` tag in [`Dockerfile.render`](./Dockerfile.render)
-- the version comment in [`render.yaml`](./render.yaml)
+Then re-check the two claims in [Security](#security) against the new tag's upstream README: whether `browser_run_code_unsafe` is still a non-opt-in **Core automation** tool, and whether `--caps` still only _adds_ capabilities. Update that section's permalink to the new tag either way — it's the only other place a version literal appears, because a permalink has to carry one.
 
-To bump, change the tag in `Dockerfile.render`, commit, and redeploy. (`runtime: docker` images don't auto-deploy when a tag moves — a fresh deploy pulls the new base.)
-
-While rolling, re-check the two claims in [Security](#security) against the new tag's upstream README: whether `browser_run_code_unsafe` is still a non-opt-in **Core automation** tool, and whether `--caps` still only _adds_ capabilities. Update the pinned link in that section to the new tag either way.
+> **Not** a version to keep in sync: the `version` field in `package.json`. This repo is a fork of [microsoft/playwright-mcp](https://github.com/microsoft/playwright-mcp), so that field is upstream's release marker for the vendored source — and the deploy never builds from it (`Dockerfile.render` copies only `render-entrypoint.sh`). Expect it to differ from the image tag; leave it alone.
 
 ---
 
