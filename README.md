@@ -4,9 +4,7 @@ Deploy [Playwright MCP](https://github.com/microsoft/playwright-mcp) on Render i
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/render-examples/playwright-mcp-render)
 
-
 https://github.com/user-attachments/assets/0f31c279-f2e0-431f-a854-50677bd800c5
-
 
 ## What it does
 
@@ -14,7 +12,7 @@ https://github.com/user-attachments/assets/0f31c279-f2e0-431f-a854-50677bd800c5
 
 It's a **thin wrapper** over the official `mcr.microsoft.com/playwright/mcp` image (headless Chromium already baked in) — no source changes. The wrapper adds only the flags Render needs (`--headless`, `--no-sandbox`, `--host 0.0.0.0`).
 
-> **Deploy this privately.** Playwright MCP has no authentication in HTTP mode, and it ships an RCE-equivalent tool. See [Security](#security) before you deploy.
+> **Restrict access before you deploy.** Playwright MCP has no authentication in HTTP mode, and it ships an RCE-equivalent tool. Anyone who learns the URL can run code in your container. See [Security](#security).
 
 For the full tool list, config options, and client setup, see the [upstream README](https://github.com/microsoft/playwright-mcp).
 
@@ -38,18 +36,18 @@ One Render web service runs the official Playwright MCP image with a thin entryp
 
 **How a deploy is assembled:**
 
-| File | Role |
-|------|------|
-| [`render.yaml`](./render.yaml) | Blueprint. Declares the single Docker web service, its plan/region, and the `PORT` env var. This is what the Deploy button reads. |
-| [`Dockerfile.render`](./Dockerfile.render) | Thin wrapper over `mcr.microsoft.com/playwright/mcp` (headless Chromium pre-baked). Adds only the entrypoint — no browser download, no source build. |
-| [`render-entrypoint.sh`](./render-entrypoint.sh) | PID 1. Reads `PORT`, resolves the allowed-hosts value, then `exec`s `node /app/cli.js` with the flags Render needs. |
-| [`.env.example`](./.env.example) | Documents the same knobs for running the container locally. |
+| File                                             | Role                                                                                                                                                 |
+| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`render.yaml`](./render.yaml)                   | Blueprint. Declares the single Docker web service, its plan/region, and the `PORT` env var. This is what the Deploy button reads.                    |
+| [`Dockerfile.render`](./Dockerfile.render)       | Thin wrapper over `mcr.microsoft.com/playwright/mcp` (headless Chromium pre-baked). Adds only the entrypoint — no browser download, no source build. |
+| [`render-entrypoint.sh`](./render-entrypoint.sh) | PID 1. Reads `PORT`, resolves the allowed-hosts value, then `exec`s `node /app/cli.js` with the flags Render needs.                                  |
+| [`.env.example`](./.env.example)                 | Documents the same knobs for running the container locally.                                                                                          |
 
 **Key properties:**
 
 - **Thin wrapper, no fork of the tool.** The Playwright MCP version is pinned by the base-image tag in `Dockerfile.render`; upgrades are a one-line tag bump (see [Rolling Playwright MCP](#rolling-playwright-mcp)).
 - **Stateless.** No database, no disk, no secrets. Each request drives an ephemeral browser context; nothing persists between requests (unless you attach a [Disk](https://render.com/docs/disks) — see [Configuration](#configuration)).
-- **Unauthenticated by design.** Playwright MCP has no auth in HTTP mode, so this template is meant to be deployed privately (see [Security](#security)).
+- **No authentication.** Playwright MCP has no auth in HTTP mode, so restricting who can reach the service is on you (see [Security](#security)).
 
 ## Prerequisites
 
@@ -72,6 +70,7 @@ You do **not** need Node.js, Playwright, or a local Chromium — the base image 
 1. Click **Deploy to Render** above (or fork this repo and create a new Blueprint from it).
 2. Render reads [`render.yaml`](./render.yaml) and provisions one Docker web service (`playwright-mcp`) on the `standard` plan.
 3. Wait for the deploy to go **live**. Your server is at `https://<your-service>.onrender.com/mcp`.
+4. **Restrict access to it** — that URL is public and unauthenticated, and reaching it is enough to run code in your container. See [Security](#security) for how to lock it down.
 
 > **Plan sizing:** headless Chromium OOMs on the free/`starter` tier (512 MB), so the Blueprint defaults to `standard` (2 GB). Downgrade only if you've confirmed your workload fits in less.
 
@@ -95,7 +94,7 @@ Or add it to a client config directly:
 }
 ```
 
-Then ask your assistant to browse — e.g. *"Open example.com and give me the page title and the main heading."* It will call the Playwright MCP tools against your hosted browser and return the result.
+Then ask your assistant to browse — e.g. _"Open example.com and give me the page title and the main heading."_ It will call the Playwright MCP tools against your hosted browser and return the result.
 
 ## Run locally
 
@@ -120,7 +119,7 @@ curl -sS -X POST http://localhost:10000/mcp \
 
 You should get back a `serverInfo` block naming `Playwright`. Point a client at `http://localhost:10000/mcp` the same way you would the deployed URL.
 
-> `--env-file .env` is a convenience, not a requirement: outside Render there's no `RENDER_EXTERNAL_HOSTNAME`, so the entrypoint already falls back to `PORT=10000` and `--allowed-hosts *`. The file just makes those defaults explicit and gives you one place to tweak them.
+> `--env-file .env` is a convenience, not a requirement: outside Render there's no `RENDER_EXTERNAL_HOSTNAME`, so the entrypoint already falls back to `PORT=10000` and `--allowed-hosts *`. The file just gives you one place to tweak them.
 
 Prefer to skip Docker entirely? Upstream runs the same server directly: `npx @playwright/mcp@latest --port 10000` — note that resolves to whatever npm publishes, not the image tag this template pins. That path is also not what Render deploys, so verify changes in the container before you push.
 
@@ -128,9 +127,9 @@ Prefer to skip Docker entirely? Upstream runs the same server directly: `npx @pl
 
 Everything is set in [`render.yaml`](./render.yaml); [`.env.example`](./.env.example) documents the same knobs for running locally.
 
-| Env var | Default | What it's for |
-|---------|---------|---------------|
-| `PORT` | `10000` | Port the MCP transport binds to; Render routes to it. |
+| Env var | Default | What it's for                                         |
+| ------- | ------- | ----------------------------------------------------- |
+| `PORT`  | `10000` | Port the MCP transport binds to; Render routes to it. |
 
 `.env.example` also lists `PLAYWRIGHT_MCP_HOST`, `PLAYWRIGHT_MCP_HEADLESS`, and `PLAYWRIGHT_MCP_NO_SANDBOX`. These matter only when you run the server **directly** (outside this image) — on Render, `render-entrypoint.sh` always passes the equivalent CLI flags, and CLI flags win, so setting them in the Render dashboard has no effect. The one exception is `PLAYWRIGHT_MCP_ALLOWED_HOSTS`, which the entrypoint does honor.
 
@@ -140,16 +139,18 @@ The browser session is **stateless and ephemeral** — no profile is persisted b
 
 ## Security
 
-**Playwright MCP has no authentication in HTTP mode. Deploy this service privately and never expose it to the public internet.**
+**Playwright MCP has no authentication in HTTP mode, and the Blueprint deploys a public web service. It's on you to restrict access.**
 
-This is not just about someone spending your CPU. Playwright MCP exposes `browser_run_code_unsafe`, whose own description calls it RCE-equivalent: it executes arbitrary code, and on the pinned version it is a `core`-capability tool, so `--caps` cannot drop it and there is no flag to disable it. **Anyone who can reach the URL can run code on the host as the container user.**
+This is not just about someone spending your CPU. Playwright MCP exposes `browser_run_code_unsafe`, described upstream as: _"Run a Playwright code snippet. Unsafe: executes arbitrary JavaScript in the Playwright server process and is RCE-equivalent."_ On the pinned version it is listed under **Core automation**, not one of the opt-in capabilities, and [`--caps`](https://github.com/microsoft/playwright-mcp/blob/v0.0.78/README.md#configuration) only enables _additional_ capabilities (`vision`, `pdf`, `devtools`) — so it cannot drop this tool, and no flag excludes individual tools. **Anyone who can reach the URL can run code in your container as the container user.**
 
-Deploy it one of these ways, in order of preference:
+Pick the option that matches how you'll connect:
 
-1. **[Private service](https://render.com/docs/private-services)** — if only other Render services need to reach it. It gets no public URL at all. This is the right default.
-2. **Public web service with the door shut** — if you need external access, restrict the service's [inbound IP rules](https://render.com/docs/inbound-ip-rules) to known addresses (Scale/Enterprise plans) and/or front it with your own authenticating proxy.
+- **Your MCP client runs on your own machine** (Claude Code, Cursor — the common case, and what [Using the app](#using-the-app) describes). You need the public URL, so shut the door on it: restrict the service's [inbound IP rules](https://render.com/docs/inbound-ip-rules) to your known addresses (Scale and Enterprise plans only) and/or put your own authenticating proxy in front.
+- **Your MCP client is another Render service.** Change `type: web` to `type: pserv` in [`render.yaml`](./render.yaml) to make it a [private service](https://render.com/docs/private-services) — it gets no public URL at all, which is strictly safer. Note that it also gets no `RENDER_EXTERNAL_HOSTNAME`, so the host check falls back to `*` and the startup banner prints a `localhost` URL; reach it over the private network instead.
 
-The entrypoint scopes the server's host check to your own `onrender.com` hostname automatically. That is a Host-header check to prevent DNS rebinding — it is **not** access control and does nothing to stop a direct request.
+**If you can do neither**, understand what you're running: the URL is the only thing standing between the internet and code execution in your container. Treat it as a credential, don't publish it, keep an eye on the service's metrics and logs, and suspend or delete the service when you're done with it. That is a weak control, not a good one.
+
+The entrypoint scopes the server's host check to your own `onrender.com` hostname automatically. That is a Host-header check to prevent DNS rebinding — it is **not** access control and does nothing to stop a direct request to your URL.
 
 ## Rolling Playwright MCP
 
@@ -159,6 +160,8 @@ Pinned to `v0.0.78` in **two** places — keep them in lockstep:
 - the version comment in [`render.yaml`](./render.yaml)
 
 To bump, change the tag in `Dockerfile.render`, commit, and redeploy. (`runtime: docker` images don't auto-deploy when a tag moves — a fresh deploy pulls the new base.)
+
+While rolling, re-check the two claims in [Security](#security) against the new tag's upstream README: whether `browser_run_code_unsafe` is still a non-opt-in **Core automation** tool, and whether `--caps` still only _adds_ capabilities. Update the pinned links in that section to the new tag either way.
 
 ---
 
