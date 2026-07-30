@@ -4,8 +4,9 @@
 # Single Docker web service: a thin wrapper (Dockerfile.render) over the official
 # mcr.microsoft.com/playwright/mcp image, which already bakes in headless Chromium.
 # No health check is declared on purpose: /mcp is a Streamable-HTTP endpoint that
-# does not answer a plain GET with 2xx, so Render's default open-port detection is
-# the correct liveness signal here.
+# does not answer a plain GET with 2xx, and Render's checker sends no bearer token,
+# so open-port detection is the correct liveness signal here. The auth gate keeps
+# that signal honest by not opening the port until the MCP server behind it accepts.
 #
 # The Playwright MCP version is pinned solely by the base-image tag in
 # Dockerfile.render. Deliberately not repeated here — one literal, one place to
@@ -23,6 +24,13 @@ services:
     dockerfilePath: ./Dockerfile.render
     dockerContext: .
     envVars:
-      # Render routes external traffic to this port; the entrypoint binds to it.
+      # Render routes external traffic to this port; the auth gate binds to it.
       - key: PORT
         value: 10000
+      # Playwright MCP has no auth of its own and exposes an RCE-equivalent tool,
+      # so every request must carry `Authorization: Bearer $MCP_TOKEN`. Render
+      # generates the value at deploy time — copy it from the service's
+      # Environment page into your MCP client. The container refuses to start if
+      # this is unset, so there is no unauthenticated path.
+      - key: MCP_TOKEN
+        generateValue: true

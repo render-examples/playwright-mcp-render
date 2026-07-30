@@ -1,5 +1,15 @@
 name: CI
 
+# This repo is a Render deploy template, not a fork that ships @playwright/mcp.
+# The deploy runs the prebuilt mcr.microsoft.com/playwright/mcp image, so upstream's
+# own lint and test jobs gated code this template never executes — src/, the npm
+# package, and a README whose generated sections this fork replaced. They are gone.
+#
+# What CI gates instead is the wrapper, which is all this repo actually owns:
+# Dockerfile.render, render-entrypoint.sh, and the bearer-token gate in
+# render-auth-proxy.mjs. render-smoke-test.sh is the same script you run locally
+# after bumping the base-image tag — see the README "Rolling Playwright MCP" section.
+
 on:
   push:
     branches: [ main ]
@@ -7,69 +17,19 @@ on:
     branches: [ main ]
 
 jobs:
-  lint:
+  smoke:
+    name: Wrapper smoke test
     runs-on: ubuntu-latest
+    # Pulling the base image and launching Chromium dominate, and a real failure
+    # reports in ~3m — so cap this well below the default 360, which would sit
+    # through a hang for six hours before calling it.
+    timeout-minutes: 15
     steps:
-    - uses: actions/checkout@v5
-    - name: Use Node.js 20
-      uses: actions/setup-node@v5
-      with:
-        node-version: '20'
-        cache: 'npm'
-    - run: npm ci
-    - run: npm run lint
-    - name: Ensure no changes
-      run: git diff --exit-code
+      - uses: actions/checkout@v5
 
-  test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-15, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-    - uses: actions/checkout@v5
-    - name: Use Node.js 20
-      uses: actions/setup-node@v5
-      with:
-        node-version: '20'
-        cache: 'npm'
-    - name: Install dependencies
-      run: npm ci
-    - name: Playwright install
-      run: npx playwright install --with-deps
-    - name: Build
-      run: npm run build
-    - name: Run playwright-mcp tests
-      run: npm test
+      # Preinstalled on GitHub's ubuntu runners, so no setup step.
+      - name: Shellcheck
+        run: shellcheck render-entrypoint.sh render-smoke-test.sh
 
-  test_mcp_docker:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v5
-    - name: Use Node.js 20
-      uses: actions/setup-node@v5
-      with:
-        node-version: '20'
-        cache: 'npm'
-    - name: Install dependencies
-      run: npm ci
-    - name: Playwright install
-      run: npx playwright install --with-deps chromium
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v4
-    - name: Build and push
-      uses: docker/build-push-action@v7
-      with:
-        tags: playwright-mcp-dev:latest
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-        load: true
-    - name: Run tests
-      shell: bash
-      run: |
-        # Used for the Docker tests to share the test-results folder with the container.
-        umask 0000
-        npm run test -- --project=chromium-docker
-      env:
-        MCP_IN_DOCKER: 1
+      - name: Build the image and smoke-test the auth gate
+        run: ./render-smoke-test.sh
