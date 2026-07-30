@@ -16,8 +16,20 @@ import { spawn } from 'node:child_process';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import http from 'node:http';
 
-const PORT = Number(process.env.PORT || 10000);
-const UPSTREAM_PORT = Number(process.env.UPSTREAM_PORT || 8931);
+// Number() alone would turn a typo into NaN, and listen(NaN) silently binds a
+// random port — the failure would only surface as an unreachable service.
+const parsePort = (value, fallback) => {
+  if (value === undefined || value === '') return fallback;
+  const port = Number(value);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    console.error(`[auth] invalid port: ${JSON.stringify(value)}`);
+    process.exit(1);
+  }
+  return port;
+};
+
+const PORT = parsePort(process.env.PORT, 10000);
+const UPSTREAM_PORT = parsePort(process.env.UPSTREAM_PORT, 8931);
 const TOKEN = process.env.MCP_TOKEN;
 
 // Fail closed: no token, no server. There is deliberately no flag to disable
@@ -32,8 +44,9 @@ if (!TOKEN) {
 const digest = value => createHash('sha256').update(value).digest();
 const EXPECTED = digest(TOKEN);
 
+// The scheme is matched case-insensitively per RFC 7235; the token itself is not.
 const isAuthorized = header => {
-  const presented = /^Bearer (.+)$/.exec(header || '')?.[1];
+  const presented = /^Bearer (.+)$/i.exec(header || '')?.[1];
   return presented !== undefined && timingSafeEqual(digest(presented), EXPECTED);
 };
 
@@ -61,23 +74,41 @@ const server = http.createServer((req, res) => {
     upstreamRes => {
       res.writeHead(upstreamRes.statusCode, upstreamRes.headers);
       upstreamRes.pipe(res);
+      // A stream that dies mid-flight would otherwise just stop, which is
+      // indistinguishable from a clean end. Log it and destroy the response so
+      // the client sees a truncated transport rather than a silent short read.
+      upstreamRes.on('aborted', () => {
+        console.error(`[auth] upstream ended the response early: ${req.method} ${req.url}`);
+        res.destroy();
+      });
     },
   );
   upstream.on('error', err => {
     console.error(`[auth] upstream error: ${err.message}`);
-    if (!res.headersSent) res.writeHead(502, { 'Content-Type': 'text/plain' });
+    // Once headers are out the status is already committed, so a 502 is
+    // impossible; writing a body here would append a bogus frame to an in-flight
+    // SSE stream. Destroying is the only honest signal left.
+    if (res.headersSent) {
+      res.destroy();
+      return;
+    }
+    res.writeHead(502, { 'Content-Type': 'text/plain' });
     res.end('Bad Gateway\n');
   });
   req.pipe(upstream);
-  req.on('aborted', () => upstream.destroy());
+  // Covers both a client disconnect and a completed response; destroying an
+  // already-finished request is a no-op, so this needs no state of its own.
+  res.on('close', () => upstream.destroy());
 });
 
-// MCP's Streamable HTTP keeps SSE responses open indefinitely; the default
-// request timeout would cut them off mid-stream.
-server.requestTimeout = 0;
-server.timeout = 0;
-server.headersTimeout = 0;
-server.keepAliveTimeout = 0;
+// Node's timeouts are left at their defaults. headersTimeout and requestTimeout
+// bound only how long a client may take to *send* a request; neither bounds how
+// long a *response* may stay open, so MCP's long-lived SSE streams are safe
+// (server.timeout already defaults to 0, so idle streams are not cut either).
+// These were previously all set to 0 to protect SSE, which was unnecessary.
+// Don't read them as a slowloris control: on the base image's Node 22 they were
+// observed not to be enforced at all, even on a bare http.Server. Bounding
+// half-open connections is Render's edge, which terminates HTTP ahead of this.
 
 for (const signal of ['SIGTERM', 'SIGINT']) {
   process.on(signal, () => {

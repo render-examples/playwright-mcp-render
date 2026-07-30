@@ -44,7 +44,7 @@ One Render web service runs the official Playwright MCP image behind a bearer-to
 | [`render.yaml`](./render.yaml) | Blueprint. Declares the single Docker web service, its plan/region, the `PORT` env var, and the generated `MCP_TOKEN`. This is what the Deploy button reads. |
 | [`Dockerfile.render`](./Dockerfile.render) | Thin wrapper over `mcr.microsoft.com/playwright/mcp` (headless Chromium pre-baked). Adds only the entrypoint and the auth gate — no browser download, no source build. |
 | [`render-entrypoint.sh`](./render-entrypoint.sh) | Reads `PORT`, resolves the allowed-hosts value, then `exec`s the auth gate with the MCP server (bound to loopback) as its argument. |
-| [`render-auth-proxy.mjs`](./render-auth-proxy.mjs) | PID 1. ~60 lines of stdlib Node: rejects any request without `Authorization: Bearer $MCP_TOKEN`, forwards the rest to `127.0.0.1:8931`, supervises the MCP server, and forwards `SIGTERM`. |
+| [`render-auth-proxy.mjs`](./render-auth-proxy.mjs) | PID 1. Stdlib-only Node, no dependencies: rejects any request without `Authorization: Bearer $MCP_TOKEN`, forwards the rest to `127.0.0.1:8931`, supervises the MCP server, and forwards `SIGTERM`. |
 | [`.env.example`](./.env.example) | Documents the same knobs for running the container locally. |
 
 **Key properties:**
