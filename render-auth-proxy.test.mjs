@@ -182,6 +182,10 @@ test('the 10th consecutive failure is the first 429', async () => {
 // The regression this whole change exists for. The old gate keyed its counter on the
 // rightmost X-Forwarded-For entry, which on Render is a proxy hop that varies per
 // request — so every failure landed on a fresh counter and 429 never came.
+//
+// RENDER_EXTERNAL_HOSTNAME is set even though the gate no longer reads it: it is what
+// switched the old code into trusting that header, so setting it here is what would
+// catch a reintroduction. Not dead weight — don't drop it.
 test('429 still arrives when the rightmost X-Forwarded-For varies per request', async () => {
   const { port } = await startGate({ RENDER_EXTERNAL_HOSTNAME: 'example.onrender.com' });
   const codes = [];

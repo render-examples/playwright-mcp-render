@@ -67,12 +67,8 @@ const isAuthorized = header => {
 // are long-lived and chatty, and whoever holds the token is the operator — a limit
 // there would break normal use without raising the bar for an attacker.
 //
-// The budget is global, not per client: this gate fronts one shared secret, so what
-// is worth guaranteeing is a ceiling on total guesses per minute, and a per-address
-// budget cannot provide it — an attacker rotating addresses simply gets a fresh one.
-// It also needs no source address, which behind Render's edge is not reliably
-// knowable: the rightmost X-Forwarded-For entry is a Render proxy hop that varies
-// from request to request, so keying on it never accumulated a count at all.
+// One budget for all clients rather than one per address; render-auth-limiter.mjs
+// documents why, and is the place to change it.
 //
 // The numbers are fixed with no env override, so no deploy can be configured into a
 // weaker control; the tests inject a clock instead of turning a knob.

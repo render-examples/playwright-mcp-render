@@ -3,7 +3,15 @@
 // Deliberately not per-client: the gate protects one shared secret, so the property
 // worth guaranteeing is a ceiling on total guesses per window. Keying on the client
 // address cannot provide that — an attacker rotating addresses gets a fresh budget
-// each time — and behind Render's edge the address is not reliably knowable anyway.
+// each time — and behind Render's edge the address is not reliably knowable anyway:
+// the rightmost X-Forwarded-For entry is a Render proxy hop that varies from request
+// to request, so the per-address version of this reached production and never counted
+// past 1 — every failure landed on a fresh counter and the 429 never came.
+//
+// The cost of that choice: any client can hold the budget empty, and while it is
+// empty a wrong token is answered 429 instead of 401. Only requests that were going
+// to be refused anyway are affected — a valid token never consumes the budget and is
+// never subject to it — so the lockout cannot be aimed at the operator.
 //
 // Fixed window rather than a token bucket: the numbers are a brute-force backstop,
 // not a traffic shaper, and a window is one integer and one timestamp with no refill

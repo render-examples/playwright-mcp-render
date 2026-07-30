@@ -123,7 +123,7 @@ echo "ok — bad tokens got 401 until the limit, then 429"
 # The lockout must not extend to the real token: it is scoped to requests that
 # would have been refused anyway, so the operator can always get back in.
 code="$(attempt "$TOKEN")"
-[ "$code" = "200" ] || fail "valid token got $code while the client was rate-limited, expected 200"
+[ "$code" = "200" ] || fail "valid token got $code while the budget was exhausted, expected 200"
 echo "ok — the valid token still gets through"
 
 step "5. Real browser tool call through the proxy"
