@@ -10,26 +10,30 @@
 // It also acts as PID 1: it spawns the upstream server given as its argv, dies
 // when the child dies, and forwards SIGTERM/SIGINT so Render's shutdown works.
 //
-// Usage: node render-auth-proxy.mjs node /app/cli.js --port 8931 ...
+// Usage: PORT=10000 UPSTREAM_PORT=8931 MCP_TOKEN=… \
+//          node render-auth-proxy.mjs node /app/cli.js --port 8931 …
+//
+// render-entrypoint.sh is the only launcher and owns the default port values, so
+// none are repeated here — a missing or malformed one is a startup error.
 
 import { spawn } from 'node:child_process';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import http from 'node:http';
+import { constants as osConstants } from 'node:os';
 
 // Number() alone would turn a typo into NaN, and listen(NaN) silently binds a
 // random port — the failure would only surface as an unreachable service.
-const parsePort = (value, fallback) => {
-  if (value === undefined || value === '') return fallback;
+const parsePort = (name, value) => {
   const port = Number(value);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    console.error(`[auth] invalid port: ${JSON.stringify(value)}`);
+  if (!value || !Number.isInteger(port) || port < 1 || port > 65535) {
+    console.error(`[auth] ${name} is not a valid port: ${JSON.stringify(value)}`);
     process.exit(1);
   }
   return port;
 };
 
-const PORT = parsePort(process.env.PORT, 10000);
-const UPSTREAM_PORT = parsePort(process.env.UPSTREAM_PORT, 8931);
+const PORT = parsePort('PORT', process.env.PORT);
+const UPSTREAM_PORT = parsePort('UPSTREAM_PORT', process.env.UPSTREAM_PORT);
 const TOKEN = process.env.MCP_TOKEN;
 
 // Fail closed: no token, no server. There is deliberately no flag to disable
@@ -57,11 +61,37 @@ if (!command) {
 }
 
 const child = spawn(command, args, { stdio: 'inherit' });
-child.on('exit', (code, signal) => process.exit(signal ? 1 : code ?? 1));
+// Report the child's fate as our own, using the shell's 128+signal convention so
+// a signal-killed server is distinguishable from a clean non-zero exit in the logs.
+child.on('exit', (code, signal) =>
+  process.exit(signal ? 128 + osConstants.signals[signal] : code ?? 1),
+);
 child.on('error', err => {
   console.error(`[auth] failed to start upstream: ${err.message}`);
   process.exit(1);
 });
+
+// Hop-by-hop headers describe a single connection, so a proxy must not pass them
+// along (RFC 9110 §7.6.1); Node writes the framing ones for each hop itself, and
+// forwarding a stale `transfer-encoding` alongside them invites request smuggling.
+const HOP_BY_HOP = [
+  'connection',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+];
+// The bearer token stops at the door it opens: upstream has no use for it, and a
+// credential should travel no further than it must.
+const STRIP_FROM_REQUEST = new Set([...HOP_BY_HOP, 'authorization']);
+const STRIP_FROM_RESPONSE = new Set(HOP_BY_HOP);
+
+// Node lower-cases incoming header names, so a lower-case lookup is exhaustive.
+const withoutHeaders = (headers, stripped) =>
+  Object.fromEntries(Object.entries(headers).filter(([name]) => !stripped.has(name)));
 
 const server = http.createServer((req, res) => {
   if (!isAuthorized(req.headers.authorization)) {
@@ -75,9 +105,15 @@ const server = http.createServer((req, res) => {
   // Host is forwarded unchanged so upstream's --allowed-hosts DNS-rebinding
   // check still sees the hostname the client actually asked for.
   const upstream = http.request(
-    { host: '127.0.0.1', port: UPSTREAM_PORT, method: req.method, path: req.url, headers: req.headers },
+    {
+      host: '127.0.0.1',
+      port: UPSTREAM_PORT,
+      method: req.method,
+      path: req.url,
+      headers: withoutHeaders(req.headers, STRIP_FROM_REQUEST),
+    },
     upstreamRes => {
-      res.writeHead(upstreamRes.statusCode, upstreamRes.headers);
+      res.writeHead(upstreamRes.statusCode, withoutHeaders(upstreamRes.headers, STRIP_FROM_RESPONSE));
       upstreamRes.pipe(res);
       // A stream that dies mid-flight would otherwise just stop, which is
       // indistinguishable from a clean end. Log it and destroy the response so
@@ -104,6 +140,15 @@ const server = http.createServer((req, res) => {
   // Covers both a client disconnect and a completed response; destroying an
   // already-finished request is a no-op, so this needs no state of its own.
   res.on('close', () => upstream.destroy());
+});
+
+// MCP's Streamable HTTP transport never upgrades a connection, and this gate does
+// not proxy one. Without a handler Node would leave the client waiting on a reply
+// that never comes, so answer it instead; no token is checked because the answer
+// is the same either way.
+server.on('upgrade', (req, socket) => {
+  console.error(`[auth] refused connection upgrade: ${req.headers.upgrade} ${req.url}`);
+  socket.end('HTTP/1.1 501 Not Implemented\r\nConnection: close\r\n\r\n');
 });
 
 // Node's timeouts are left at their defaults. headersTimeout and requestTimeout

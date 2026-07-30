@@ -18,6 +18,8 @@
 # (comma-separated) or to pass "*" to disable the host check.
 set -eu
 
+# These two defaults live here and nowhere else: the proxy requires both to be
+# set and exits if either is missing, so this is the single place to change them.
 PORT="${PORT:-10000}"
 # Loopback port the real MCP server listens on; only the proxy can reach it.
 UPSTREAM_PORT="${UPSTREAM_PORT:-8931}"

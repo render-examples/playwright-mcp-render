@@ -179,6 +179,7 @@ Upstream ships no authentication in HTTP mode, which is defensible when the serv
 - **Generated secret, not a default.** `render.yaml` uses `generateValue: true`, so every deploy gets its own token and there is no shared credential in this repo to leak.
 - **Constant-time comparison** of SHA-256 digests, so the check doesn't leak the token a byte at a time, and a token prefix is not accepted.
 - **Never logs the token.** Rejections log method, path, and `401` — nothing presented by the client.
+- **Stops the token at the door.** The `Authorization` header is not forwarded to the MCP server, along with the hop-by-hop headers a proxy is required to drop. Connection upgrades (WebSocket and the like) are answered `501` rather than proxied, since the MCP transport never needs one.
 
 ### What it does not do
 
