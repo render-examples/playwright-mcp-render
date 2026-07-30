@@ -10,6 +10,9 @@
 // It also acts as PID 1: it spawns the upstream server given as its argv, dies
 // when the child dies, and forwards SIGTERM/SIGINT so Render's shutdown works.
 //
+// It binds $PORT only once that server is accepting connections, so the open port
+// means the whole stack is ready rather than just this gate (see waitForUpstream).
+//
 // Usage: PORT=10000 UPSTREAM_PORT=8931 MCP_TOKEN=… \
 //          node render-auth-proxy.mjs node /app/cli.js --port 8931 …
 //
@@ -19,7 +22,9 @@
 import { spawn } from 'node:child_process';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import http from 'node:http';
+import net from 'node:net';
 import { constants as osConstants } from 'node:os';
+import { setTimeout as delay } from 'node:timers/promises';
 
 // Number() alone would turn a typo into NaN, and listen(NaN) silently binds a
 // random port — the failure would only surface as an unreachable service.
@@ -179,6 +184,50 @@ server.on('error', err => {
   console.error(`[auth] cannot listen on port ${PORT}: ${err.message}`);
   process.exit(1);
 });
+
+// Render decides a service is live as soon as something accepts on $PORT, and it
+// sends no auth header, so a health check can't be the readiness signal here (that
+// is why render.yaml declares none). If this gate bound immediately, "live" would
+// mean "the door is staffed" while the room behind it was still empty, and the
+// first requests after a deploy would get the 502 above. So don't open the door
+// until upstream answers: then the open port means the whole stack is ready, and
+// an upstream that never comes up fails the deploy instead of going live broken.
+const UPSTREAM_ACCEPT_TIMEOUT_MS = 60_000;
+const UPSTREAM_POLL_MS = 250;
+
+// Resolves true only on a completed TCP connect. The per-attempt timeout is what
+// keeps the deadline below meaningful — it is only checked between attempts, so a
+// connect left hanging would otherwise wait past it forever.
+const upstreamAccepts = () =>
+  new Promise(resolve => {
+    const socket = net.connect(UPSTREAM_PORT, '127.0.0.1');
+    const settle = accepted => {
+      socket.destroy();
+      resolve(accepted);
+    };
+    socket.setTimeout(UPSTREAM_POLL_MS, () => settle(false));
+    socket.once('connect', () => settle(true));
+    socket.once('error', () => settle(false));
+  });
+
+// A child that dies while we wait exits the process via its own 'exit' handler, so
+// the usual failure needs no handling here; the deadline is for a server that stays
+// up without ever listening, which would otherwise hang the deploy with no reason.
+const waitForUpstream = async () => {
+  const deadline = Date.now() + UPSTREAM_ACCEPT_TIMEOUT_MS;
+  while (!(await upstreamAccepts())) {
+    if (Date.now() >= deadline) {
+      console.error(
+        `[auth] upstream never accepted on 127.0.0.1:${UPSTREAM_PORT} within ${UPSTREAM_ACCEPT_TIMEOUT_MS / 1000}s. Not opening port ${PORT}.`,
+      );
+      process.exit(1);
+    }
+    await delay(UPSTREAM_POLL_MS);
+  }
+};
+
+console.log(`[auth] waiting for upstream on 127.0.0.1:${UPSTREAM_PORT} before opening port ${PORT}`);
+await waitForUpstream();
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`[auth] Bearer-token gate listening on 0.0.0.0:${PORT} → 127.0.0.1:${UPSTREAM_PORT}`);

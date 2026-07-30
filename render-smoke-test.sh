@@ -61,10 +61,10 @@ echo "ok — exited non-zero: $(grep '\[auth\]' "$WORKDIR/noauth.log")"
 
 step "2. Starting the container and waiting for a successful handshake"
 docker run -d --name "$CONTAINER" -e MCP_TOKEN="$TOKEN" -p "$PORT:10000" "$IMAGE" >/dev/null
-# Readiness has to be a *complete* handshake, not just a bound port: the gate binds
-# immediately and answers 401 while the MCP server behind it is still starting, so
-# an authenticated request in that window gets a 502 from the proxy. Polling for the
-# real thing is also why a fixed sleep won't do — Chromium's first launch dominates.
+# Readiness is a *complete* handshake, not a reachable port. The gate deliberately
+# doesn't open $PORT until upstream accepts, so early polls are refused connections
+# rather than errors — and asserting the handshake proves the whole chain, which is
+# the claim that matters. A fixed sleep won't do: the base image's startup varies.
 for _ in $(seq 60); do
   handshake="$(curl -sS -D "$WORKDIR/headers.txt" -X POST "http://127.0.0.1:$PORT/mcp" \
     -H "Authorization: Bearer $TOKEN" \

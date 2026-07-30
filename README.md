@@ -44,7 +44,7 @@ One Render web service runs the official Playwright MCP image behind a bearer-to
 | [`render.yaml`](./render.yaml) | Blueprint. Declares the single Docker web service, its plan/region, the `PORT` env var, and the generated `MCP_TOKEN`. This is what the Deploy button reads. |
 | [`Dockerfile.render`](./Dockerfile.render) | Thin wrapper over `mcr.microsoft.com/playwright/mcp` (headless Chromium pre-baked). Adds only the entrypoint and the auth gate — no browser download, no source build. |
 | [`render-entrypoint.sh`](./render-entrypoint.sh) | Reads `PORT`, resolves the allowed-hosts value, then `exec`s the auth gate with the MCP server (bound to loopback) as its argument. |
-| [`render-auth-proxy.mjs`](./render-auth-proxy.mjs) | PID 1. Stdlib-only Node, no dependencies: rejects any request without `Authorization: Bearer $MCP_TOKEN`, forwards the rest to `127.0.0.1:8931`, supervises the MCP server, and forwards `SIGTERM`. |
+| [`render-auth-proxy.mjs`](./render-auth-proxy.mjs) | PID 1. Stdlib-only Node, no dependencies: rejects any request without `Authorization: Bearer $MCP_TOKEN`, forwards the rest to `127.0.0.1:8931`, supervises the MCP server, holds the public port closed until that server accepts, and forwards `SIGTERM`. |
 | [`render-smoke-test.sh`](./render-smoke-test.sh) | Builds the image and checks the wrapper end to end: fails closed without `MCP_TOKEN`, `401` without the header, a handshake and a real browser tool call with it, clean `SIGTERM`. CI runs this on every PR. |
 | [`.env.example`](./.env.example) | Documents the same knobs for running the container locally. |
 
@@ -120,7 +120,7 @@ docker build -f Dockerfile.render -t playwright-mcp-render .
 docker run --rm --env-file .env -p 10000:10000 playwright-mcp-render
 ```
 
-Once ready, the container prints the auth gate's `[auth] Bearer-token gate listening …` line followed by upstream's own `Listening on …`. (The `[startup]` line above it prints an `https://` URL — that scheme is for the deployed service; locally, use `http`.) Verify the server with an MCP handshake — export the same token you put in `.env` first, so the header below resolves:
+Once ready, the container prints upstream's own `Listening on …` and then the gate's `[auth] Bearer-token gate listening …` — in that order, because the gate holds the public port closed until the server behind it accepts, so the last line is the one that means the service is reachable. (The `[startup]` line above it prints an `https://` URL — that scheme is for the deployed service; locally, use `http`.) Verify the server with an MCP handshake — export the same token you put in `.env` first, so the header below resolves:
 
 ```bash
 curl -sS -X POST http://localhost:10000/mcp \
