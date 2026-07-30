@@ -51,6 +51,11 @@ const isAuthorized = header => {
 };
 
 const [command, ...args] = process.argv.slice(2);
+if (!command) {
+  console.error('[auth] usage: node render-auth-proxy.mjs <upstream-command> [args...]');
+  process.exit(1);
+}
+
 const child = spawn(command, args, { stdio: 'inherit' });
 child.on('exit', (code, signal) => process.exit(signal ? 1 : code ?? 1));
 child.on('error', err => {
@@ -105,9 +110,8 @@ const server = http.createServer((req, res) => {
 // bound only how long a client may take to *send* a request; neither bounds how
 // long a *response* may stay open, so MCP's long-lived SSE streams are safe
 // (server.timeout already defaults to 0, so idle streams are not cut either).
-// These were previously all set to 0 to protect SSE, which was unnecessary.
-// Don't read them as a slowloris control: on the base image's Node 22 they were
-// observed not to be enforced at all, even on a bare http.Server. Bounding
+// Don't read them as a slowloris control either: on the base image's Node 22 they
+// were observed not to be enforced at all, even on a bare http.Server. Bounding
 // half-open connections is Render's edge, which terminates HTTP ahead of this.
 
 for (const signal of ['SIGTERM', 'SIGINT']) {
