@@ -11,7 +11,7 @@
 #   1. the container refuses to start without MCP_TOKEN (fails closed)
 #   2. a request with the token completes an MCP handshake
 #   3. a request without it gets 401
-#   4. repeated bad tokens get rate-limited to 429, and a good one still works
+#   4. sustained bad tokens keep getting 401, log volume stays bounded, good one works
 #   5. a real browser tool call round-trips (this is the SSE path through the proxy)
 #   6. SIGTERM stops the container promptly and cleanly (the proxy is PID 1)
 #
@@ -98,10 +98,12 @@ code="$(curl -s -o "$WORKDIR/401.txt" -w '%{http_code}' -X POST "http://127.0.0.
 $(cat "$WORKDIR/401.txt")"
 echo "ok — unauthenticated request got 401"
 
-step "4. Repeated bad tokens get rate-limited"
-# The gate allows a burst of failures per client and then answers 429 for the rest
-# of the window. Bounded well above that burst so this reports a broken limiter
-# rather than hanging; check 3 already spent one of the allowance.
+step "4. Sustained bad tokens keep getting 401 and don't flood the log"
+# There is deliberately no per-client lockout: MCP_TOKEN is machine-generated and
+# not guessable at HTTP speed, and rate limiting belongs at Render's edge (see the
+# README "Security" section). What the gate must not do is let an attacker bury
+# every other line in the log, so rejections are logged a few per minute and then
+# summarized.
 attempt() {
   curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/mcp" \
     -H "Authorization: Bearer $1" \
@@ -109,21 +111,20 @@ attempt() {
     -H 'Accept: application/json, text/event-stream' \
     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke-test","version":"1"}}}'
 }
-limited=""
-for _ in $(seq 30); do
+for i in $(seq 20); do
   code="$(attempt "not-the-token")"
-  case "$code" in
-    401) ;;
-    429) limited="yes"; break ;;
-    *) fail "bad token got $code, expected 401 or 429" ;;
-  esac
+  [ "$code" = "401" ] || fail "bad token #$i got $code, expected 401"
 done
-[ -n "$limited" ] || fail "30 bad tokens in a row never got a 429 — the rate limiter is not engaging"
-echo "ok — bad tokens got 401 until the limit, then 429"
-# The lockout must not extend to the real token: it is scoped to requests that
-# would have been refused anyway, so the operator can always get back in.
+echo "ok — 20 bad tokens all got 401"
+# 20 rejections just happened plus one from check 3, but only a handful may be
+# logged individually. The bound is what matters, not the exact count.
+logged="$(docker logs "$CONTAINER" 2>&1 | grep -c '\[auth\] 401' || true)"
+[ "$logged" -le 10 ] \
+  || fail "21 rejections produced $logged log lines — the log throttle is not engaging"
+echo "ok — log volume bounded to $logged lines"
+# The gate must not have broken the happy path while refusing all of that.
 code="$(attempt "$TOKEN")"
-[ "$code" = "200" ] || fail "valid token got $code while the client was rate-limited, expected 200"
+[ "$code" = "200" ] || fail "valid token got $code after a burst of bad ones, expected 200"
 echo "ok — the valid token still gets through"
 
 step "5. Real browser tool call through the proxy"
