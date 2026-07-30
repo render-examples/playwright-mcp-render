@@ -6,7 +6,7 @@
 // internet. This process is the door: it listens on $PORT, requires
 // `Authorization: Bearer $MCP_TOKEN`, and forwards only authenticated requests
 // to the real server on 127.0.0.1:$UPSTREAM_PORT (which is not published). Failed
-// attempts are rate-limited per client so the token can't be guessed at speed.
+// attempts share one global budget so the token can't be guessed at speed.
 //
 // It also acts as PID 1: it spawns the upstream server given as its argv, dies
 // when the child dies, and forwards SIGTERM/SIGINT so Render's shutdown works.
@@ -26,6 +26,8 @@ import http from 'node:http';
 import net from 'node:net';
 import { constants as osConstants } from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
+
+import { createFailureBudget } from './render-auth-limiter.mjs';
 
 // Number() alone would turn a typo into NaN, and listen(NaN) silently binds a
 // random port — the failure would only surface as an unreachable service.
@@ -64,73 +66,19 @@ const isAuthorized = header => {
 // is worth limiting. Authenticated traffic is deliberately uncapped: MCP sessions
 // are long-lived and chatty, and whoever holds the token is the operator — a limit
 // there would break normal use without raising the bar for an attacker.
+//
+// One budget for all clients rather than one per address; render-auth-limiter.mjs
+// documents why, and is the place to change it.
+//
+// The numbers are fixed with no env override, so no deploy can be configured into a
+// weaker control; the tests inject a clock instead of turning a knob.
 const AUTH_FAILURE_LIMIT = 10;
 const AUTH_FAILURE_WINDOW_MS = 60_000;
-// Failures are tracked per client, so an attacker rotating source addresses would
-// otherwise grow this map without bound. Entries are evicted oldest-first past the
-// cap, which costs a determined attacker nothing but keeps memory flat.
-const MAX_TRACKED_CLIENTS = 10_000;
 
-// Render terminates TLS at its edge and appends the connecting address to
-// X-Forwarded-For, so the rightmost entry is the one Render observed; everything
-// left of it is client-supplied and worthless. Off Render there is no trusted
-// proxy in front, so the header is ignored and the socket address is the only
-// fact available.
-const TRUST_FORWARDED_FOR = Boolean(process.env.RENDER_EXTERNAL_HOSTNAME);
-
-const clientAddress = req => {
-  if (TRUST_FORWARDED_FOR) {
-    const observed = req.headers['x-forwarded-for']?.split(',').pop()?.trim();
-    if (observed) return observed;
-  }
-  return req.socket.remoteAddress ?? 'unknown';
-};
-
-// Fixed window rather than a token bucket: the numbers here are a brute-force
-// backstop, not a traffic shaper, and a window is one integer and one timestamp
-// per client with no refill arithmetic to get wrong.
-const failures = new Map();
-
-const sweepFailures = now => {
-  for (const [address, entry] of failures)
-    if (entry.resetAt <= now) failures.delete(address);
-};
-
-// Runs on the same cadence as the window, so an idle gate settles back to empty.
-// Unrefed so this timer alone never keeps the process alive.
-setInterval(() => sweepFailures(Date.now()), AUTH_FAILURE_WINDOW_MS).unref();
-
-// Returns the milliseconds left in the window while a client is locked out, or 0
-// while it still has attempts.
-const lockoutRemaining = address => {
-  const entry = failures.get(address);
-  if (!entry) return 0;
-  const now = Date.now();
-  if (entry.resetAt <= now) {
-    failures.delete(address);
-    return 0;
-  }
-  return entry.count >= AUTH_FAILURE_LIMIT ? entry.resetAt - now : 0;
-};
-
-const recordFailure = address => {
-  const now = Date.now();
-  const entry = failures.get(address);
-  if (entry && entry.resetAt > now) {
-    entry.count += 1;
-    // Log the moment a client crosses the line and then stay quiet: an attacker
-    // that could produce a line per attempt could bury everything else in the log.
-    if (entry.count === AUTH_FAILURE_LIMIT)
-      console.error(`[auth] rate limiting ${address} after ${entry.count} failed attempts`);
-    return;
-  }
-  if (failures.size >= MAX_TRACKED_CLIENTS) {
-    sweepFailures(now);
-    // Map iteration is insertion-ordered, so the first key is the oldest window.
-    if (failures.size >= MAX_TRACKED_CLIENTS) failures.delete(failures.keys().next().value);
-  }
-  failures.set(address, { count: 1, resetAt: now + AUTH_FAILURE_WINDOW_MS });
-};
+const recordAuthFailure = createFailureBudget({
+  limit: AUTH_FAILURE_LIMIT,
+  windowMs: AUTH_FAILURE_WINDOW_MS,
+});
 
 const [command, ...args] = process.argv.slice(2);
 if (!command) {
@@ -172,15 +120,24 @@ const withoutHeaders = (headers, stripped) =>
   Object.fromEntries(Object.entries(headers).filter(([name]) => !stripped.has(name)));
 
 const server = http.createServer((req, res) => {
-  const address = clientAddress(req);
-
   if (!isAuthorized(req.headers.authorization)) {
-    // The lockout applies only to requests that were going to be refused anyway.
-    // Deciding it before the token check would be marginally cheaper, but it would
-    // also shut out an operator holding the right token because an earlier client
-    // on their address got it wrong — a self-inflicted outage to save a hash.
-    const retryAfterMs = lockoutRemaining(address);
+    // The budget is spent only by requests that were going to be refused anyway, so
+    // a valid token never touches it and the operator can always get in. That is what
+    // makes a global budget safe: the lockout cannot be aimed at whoever holds the
+    // token. Note there is deliberately no forgiveness on success either — resetting
+    // the budget when the operator authenticates would hand an attacker a fresh
+    // allowance every time.
+    const { retryAfterMs, justLocked } = recordAuthFailure();
+    // Refused either way, so the body is never read; discard it rather than letting
+    // an unread body tear the connection down mid-send.
+    req.resume();
     if (retryAfterMs > 0) {
+      // One line as the budget is spent and then silence: an attacker that could
+      // produce a line per attempt could bury everything else in the log.
+      if (justLocked)
+        console.error(
+          `[auth] rate limiting failed attempts after ${AUTH_FAILURE_LIMIT} in ${AUTH_FAILURE_WINDOW_MS / 1000}s`,
+        );
       res.writeHead(429, {
         'Retry-After': String(Math.ceil(retryAfterMs / 1000)),
         'Content-Type': 'text/plain',
@@ -188,17 +145,12 @@ const server = http.createServer((req, res) => {
       res.end('Too Many Requests\n');
       return;
     }
-    recordFailure(address);
     // No detail in the body, and never log the presented token.
     console.error(`[auth] 401 ${req.method} ${req.url}`);
     res.writeHead(401, { 'WWW-Authenticate': 'Bearer', 'Content-Type': 'text/plain' });
     res.end('Unauthorized\n');
     return;
   }
-  // A correct token proves this address is the operator's, so its failures — a
-  // stale header, a client retrying mid-rotation — are forgiven rather than
-  // accumulated toward a lockout.
-  failures.delete(address);
 
   // Host is forwarded unchanged so upstream's --allowed-hosts DNS-rebinding
   // check still sees the hostname the client actually asked for.

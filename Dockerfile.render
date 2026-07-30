@@ -12,5 +12,8 @@ FROM mcr.microsoft.com/playwright/mcp:v0.0.78
 # directive above (Render builds with BuildKit).
 COPY --chmod=0755 render-entrypoint.sh /usr/local/bin/render-entrypoint.sh
 COPY render-auth-proxy.mjs /usr/local/bin/render-auth-proxy.mjs
+# Imported by the proxy, so it has to sit beside it — omit this and the container
+# crashes at startup on a missing module.
+COPY render-auth-limiter.mjs /usr/local/bin/render-auth-limiter.mjs
 
 ENTRYPOINT ["/usr/local/bin/render-entrypoint.sh"]

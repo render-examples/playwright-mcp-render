@@ -99,9 +99,9 @@ $(cat "$WORKDIR/401.txt")"
 echo "ok — unauthenticated request got 401"
 
 step "4. Repeated bad tokens get rate-limited"
-# The gate allows a burst of failures per client and then answers 429 for the rest
-# of the window. Bounded well above that burst so this reports a broken limiter
-# rather than hanging; check 3 already spent one of the allowance.
+# The gate allows a burst of failures — one budget shared by all clients — and then
+# answers 429 for the rest of the window. Bounded well above that burst so this reports
+# a broken limiter rather than hanging; check 3 already spent one of the allowance.
 attempt() {
   curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/mcp" \
     -H "Authorization: Bearer $1" \
@@ -123,7 +123,7 @@ echo "ok — bad tokens got 401 until the limit, then 429"
 # The lockout must not extend to the real token: it is scoped to requests that
 # would have been refused anyway, so the operator can always get back in.
 code="$(attempt "$TOKEN")"
-[ "$code" = "200" ] || fail "valid token got $code while the client was rate-limited, expected 200"
+[ "$code" = "200" ] || fail "valid token got $code while the budget was exhausted, expected 200"
 echo "ok — the valid token still gets through"
 
 step "5. Real browser tool call through the proxy"

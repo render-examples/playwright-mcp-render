@@ -18,6 +18,7 @@
   "scripts": {
     "lint": "node update-readme.js",
     "test": "playwright test",
+    "test:wrapper": "node --test render-auth-*.test.mjs",
     "ctest": "playwright test --project=chrome",
     "ftest": "playwright test --project=firefox",
     "wtest": "playwright test --project=webkit",
