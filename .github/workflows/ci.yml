@@ -17,6 +17,24 @@ on:
     branches: [ main ]
 
 jobs:
+  # Ahead of the smoke test on purpose: these need no Docker build, so a broken auth
+  # gate fails in seconds instead of after pulling the base image and launching Chromium.
+  wrapper:
+    name: Auth gate tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+
+      # No dependencies to install: the tests are node:test over the wrapper's own
+      # files, which import nothing outside the standard library.
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Test the auth gate
+        run: npm run test:wrapper
+
   smoke:
     name: Wrapper smoke test
     runs-on: ubuntu-latest

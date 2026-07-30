@@ -99,9 +99,9 @@ $(cat "$WORKDIR/401.txt")"
 echo "ok — unauthenticated request got 401"
 
 step "4. Repeated bad tokens get rate-limited"
-# The gate allows a burst of failures per client and then answers 429 for the rest
-# of the window. Bounded well above that burst so this reports a broken limiter
-# rather than hanging; check 3 already spent one of the allowance.
+# The gate allows a burst of failures — one budget shared by all clients — and then
+# answers 429 for the rest of the window. Bounded well above that burst so this reports
+# a broken limiter rather than hanging; check 3 already spent one of the allowance.
 attempt() {
   curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/mcp" \
     -H "Authorization: Bearer $1" \
