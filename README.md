@@ -44,7 +44,8 @@ One Render web service runs the official Playwright MCP image behind a bearer-to
 | [`render.yaml`](./render.yaml) | Blueprint. Declares the single Docker web service, its plan/region, the `PORT` env var, and the generated `MCP_TOKEN`. This is what the Deploy button reads. |
 | [`Dockerfile.render`](./Dockerfile.render) | Thin wrapper over `mcr.microsoft.com/playwright/mcp` (headless Chromium pre-baked). Adds only the entrypoint and the auth gate — no browser download, no source build. |
 | [`render-entrypoint.sh`](./render-entrypoint.sh) | Reads `PORT`, resolves the allowed-hosts value, then `exec`s the auth gate with the MCP server (bound to loopback) as its argument. |
-| [`render-auth-proxy.mjs`](./render-auth-proxy.mjs) | PID 1. Stdlib-only Node, no dependencies: rejects any request without `Authorization: Bearer $MCP_TOKEN` and rate-limits clients that keep guessing, forwards the rest to `127.0.0.1:8931`, supervises the MCP server, holds the public port closed until that server accepts, and forwards `SIGTERM`. |
+| [`render-auth-proxy.mjs`](./render-auth-proxy.mjs) | PID 1. Stdlib-only Node, no dependencies: rejects any request without `Authorization: Bearer $MCP_TOKEN` and rate-limits repeated guessing, forwards the rest to `127.0.0.1:8931`, supervises the MCP server, holds the public port closed until that server accepts, and forwards `SIGTERM`. |
+| [`render-auth-limiter.mjs`](./render-auth-limiter.mjs) | The gate's rate limit, kept separate because it is the one piece with state worth testing on its own: a fixed-window cap on failed authentications, counted across all clients. Imported by the proxy, so `Dockerfile.render` has to copy it too. |
 | [`render-smoke-test.sh`](./render-smoke-test.sh) | Builds the image and checks the wrapper end to end: fails closed without `MCP_TOKEN`, `401` without the header, `429` after repeated bad ones, a handshake and a real browser tool call with the right one, clean `SIGTERM`. CI runs this on every PR. |
 | [`.env.example`](./.env.example) | Documents the same knobs for running the container locally. |
 
@@ -192,6 +193,8 @@ This is one door, not defense in depth. It does not sandbox the RCE, cap what an
 - **Treat the token as a password.** Keep it out of shared configs and issue trackers, rotate it in the Dashboard if it may have leaked (a redeploy picks up the new value), and suspend or delete the service when you're done with it.
 - **Watch it.** The service's logs and metrics are how you'd notice use you didn't initiate; `401` lines mean someone is knocking.
 
+One consequence of that shared budget is worth knowing before you debug against it: while someone is exhausting it, a request carrying the *wrong* token gets `429` rather than `401`. If you're testing with a token that turns out to be stale — rotated in the Dashboard, or copied from an older service — the status code won't tell you that, and the fix is to check the token rather than to wait out the `Retry-After`. A request with the right token is unaffected either way.
+
 The host check the entrypoint sets up (see [Configuration](#configuration)) is a Host-header check against DNS rebinding — **not** access control. It does nothing to stop a direct request carrying a valid token.
 
 ## Rolling Playwright MCP
@@ -200,9 +203,9 @@ The version is pinned in exactly one place: the base-image tag in [`Dockerfile.r
 
 Then re-check the two claims in [Security](#security) against the new tag's upstream README: whether `browser_run_code_unsafe` is still a non-opt-in **Core automation** tool, and whether `--caps` still only _adds_ capabilities. Update that section's permalink to the new tag either way — it's the only other place a version literal appears, because a permalink has to carry one.
 
-Then re-verify the gate, since it depends on upstream's HTTP surface. `npm run test:wrapper` covers the gate's own logic in seconds without Docker (the failure budget, and the proxy answering `401`/`429`/`200` over a stub upstream), and `./render-smoke-test.sh` builds the new image and checks it end to end (`401` without the header, `429` after repeated bad tokens, a handshake with the right one, a real tool call through the SSE path, clean shutdown). CI runs the same script on every PR, so opening one is equivalent. If upstream ever ships real authentication, prefer it and delete `render-auth-proxy.mjs` — this file exists only to fill that gap.
+Then re-verify the gate, since it depends on upstream's HTTP surface. `npm run test:wrapper` covers the gate's own logic in seconds without Docker (the failure budget, and the proxy answering `401`/`429`/`200` over a stub upstream), and `./render-smoke-test.sh` builds the new image and checks it end to end (`401` without the header, `429` after repeated bad tokens, a handshake with the right one, a real tool call through the SSE path, clean shutdown). CI runs both on every PR, so opening one is equivalent. If upstream ever ships real authentication, prefer it and delete `render-auth-proxy.mjs` — this file exists only to fill that gap.
 
-> **Not** a version to keep in sync: the `version` field in `package.json`. This repo is a fork of [microsoft/playwright-mcp](https://github.com/microsoft/playwright-mcp), so that field is upstream's own npm release marker — and the deploy never uses it (`Dockerfile.render` copies only `render-entrypoint.sh` and `render-auth-proxy.mjs`). Expect it to differ from the image tag; leave it alone.
+> **Not** a version to keep in sync: the `version` field in `package.json`. This repo is a fork of [microsoft/playwright-mcp](https://github.com/microsoft/playwright-mcp), so that field is upstream's own npm release marker — and the deploy never uses it (`Dockerfile.render` copies only `render-entrypoint.sh`, `render-auth-proxy.mjs`, and `render-auth-limiter.mjs`). Expect it to differ from the image tag; leave it alone.
 
 ---
 

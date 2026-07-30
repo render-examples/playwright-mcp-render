@@ -83,10 +83,6 @@ const recordAuthFailure = createFailureBudget({
   limit: AUTH_FAILURE_LIMIT,
   windowMs: AUTH_FAILURE_WINDOW_MS,
 });
-// Log the attempt that crosses the line and then stay quiet: an attacker that could
-// produce a line per attempt could bury everything else in the log. Cleared by the
-// first failure that has budget again, which is how a new window announces itself.
-let lockedOut = false;
 
 const [command, ...args] = process.argv.slice(2);
 if (!command) {
@@ -135,15 +131,17 @@ const server = http.createServer((req, res) => {
     // token. Note there is deliberately no forgiveness on success either — resetting
     // the budget when the operator authenticates would hand an attacker a fresh
     // allowance every time.
-    const retryAfterMs = recordAuthFailure();
+    const { retryAfterMs, justLocked } = recordAuthFailure();
     // Refused either way, so the body is never read; discard it rather than letting
     // an unread body tear the connection down mid-send.
     req.resume();
     if (retryAfterMs > 0) {
-      if (!lockedOut) {
-        lockedOut = true;
-        console.error(`[auth] rate limiting failed attempts after ${AUTH_FAILURE_LIMIT} in a minute`);
-      }
+      // One line as the budget is spent and then silence: an attacker that could
+      // produce a line per attempt could bury everything else in the log.
+      if (justLocked)
+        console.error(
+          `[auth] rate limiting failed attempts after ${AUTH_FAILURE_LIMIT} in ${AUTH_FAILURE_WINDOW_MS / 1000}s`,
+        );
       res.writeHead(429, {
         'Retry-After': String(Math.ceil(retryAfterMs / 1000)),
         'Content-Type': 'text/plain',
@@ -151,7 +149,6 @@ const server = http.createServer((req, res) => {
       res.end('Too Many Requests\n');
       return;
     }
-    lockedOut = false;
     // No detail in the body, and never log the presented token.
     console.error(`[auth] 401 ${req.method} ${req.url}`);
     res.writeHead(401, { 'WWW-Authenticate': 'Bearer', 'Content-Type': 'text/plain' });

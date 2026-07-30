@@ -34,17 +34,24 @@ const STUB_UPSTREAM = `
     .listen(process.env.UPSTREAM_PORT, '127.0.0.1');
 `;
 
-// Racy in principle — the port could be taken between close and re-bind — but this is
-// loopback on a test runner, and the alternative is hard-coding a port that collides
-// with whatever else the machine is doing.
-const freePort = () =>
+const reservePort = () =>
   new Promise(resolve => {
     const probe = net.createServer();
-    probe.listen(0, '127.0.0.1', () => {
-      const { port } = probe.address();
-      probe.close(() => resolve(port));
-    });
+    probe.listen(0, '127.0.0.1', () => resolve(probe));
   });
+
+// Every port is held open until all of them are reserved, so the ports handed back are
+// distinct — reserving them one at a time could return the same port twice, leaving the
+// gate and its upstream pointed at one port and failing as an unexplained EADDRINUSE.
+// Racing an unrelated process for a just-released port is still possible in principle,
+// but this is loopback on a test runner, and the alternative is hard-coding ports that
+// collide with whatever else the machine is doing.
+const freePorts = async count => {
+  const probes = await Promise.all(Array.from({ length: count }, () => reservePort()));
+  const ports = probes.map(probe => probe.address().port);
+  await Promise.all(probes.map(probe => new Promise(resolve => probe.close(resolve))));
+  return ports;
+};
 
 const request = (port, { headers = {}, body = '' } = {}) =>
   new Promise((resolve, reject) => {
@@ -64,8 +71,7 @@ const bearer = token => ({ Authorization: `Bearer ${token}` });
 // and resolves once it is answering. Collects output so a failure can show why.
 const running = [];
 const startGate = async (env = {}) => {
-  const port = await freePort();
-  const upstreamPort = await freePort();
+  const [port, upstreamPort] = await freePorts(2);
   const child = spawn(process.execPath, [PROXY, process.execPath, '-e', STUB_UPSTREAM], {
     env: { ...process.env, PORT: String(port), UPSTREAM_PORT: String(upstreamPort), MCP_TOKEN: TOKEN, ...env },
     // Own process group, so cleanup can take the stub upstream down with the gate. The

@@ -7,8 +7,9 @@ name: CI
 #
 # What CI gates instead is the wrapper, which is all this repo actually owns:
 # Dockerfile.render, render-entrypoint.sh, and the bearer-token gate in
-# render-auth-proxy.mjs. render-smoke-test.sh is the same script you run locally
-# after bumping the base-image tag — see the README "Rolling Playwright MCP" section.
+# render-auth-proxy.mjs and render-auth-limiter.mjs. Both jobs below are the same
+# commands you run locally after bumping the base-image tag — `npm run test:wrapper`
+# and `./render-smoke-test.sh`, see the README "Rolling Playwright MCP" section.
 
 on:
   push:
@@ -19,7 +20,7 @@ on:
 jobs:
   # Ahead of the smoke test on purpose: these need no Docker build, so a broken auth
   # gate fails in seconds instead of after pulling the base image and launching Chromium.
-  wrapper:
+  gate:
     name: Auth gate tests
     runs-on: ubuntu-latest
     timeout-minutes: 5
