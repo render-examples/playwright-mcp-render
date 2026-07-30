@@ -20,8 +20,9 @@ jobs:
   smoke:
     name: Wrapper smoke test
     runs-on: ubuntu-latest
-    # Pulling the base image and launching Chromium dominate; the default 360 is
-    # long enough to sit through a hang that a failure would have reported in ~3m.
+    # Pulling the base image and launching Chromium dominate, and a real failure
+    # reports in ~3m — so cap this well below the default 360, which would sit
+    # through a hang for six hours before calling it.
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5

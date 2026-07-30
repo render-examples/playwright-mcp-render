@@ -177,7 +177,7 @@ Upstream ships no authentication in HTTP mode, which is defensible when the serv
 [`render-auth-proxy.mjs`](./render-auth-proxy.mjs) is the only thing listening on `$PORT`. It answers `401` to any request without `Authorization: Bearer $MCP_TOKEN` and forwards the rest to the MCP server, which binds to `127.0.0.1` and is never published. Specifically:
 
 - **Fails closed.** No `MCP_TOKEN`, no start — there is deliberately no flag to disable the check, so no misconfiguration leaves the server anonymous.
-- **Generated secret, not a default.** `render.yaml` uses `generateValue: true`, so every deploy gets its own token and there is no shared credential in this repo to leak.
+- **Generated secret, not a default.** `render.yaml` uses `generateValue: true`, so each service gets its own token — generated once when the service is created and stable across redeploys, so clients keep working — and there is no shared credential in this repo to leak.
 - **Constant-time comparison** of SHA-256 digests, so the check doesn't leak the token a byte at a time, and a token prefix is not accepted.
 - **Never logs the token.** Rejections log method, path, and `401` — nothing presented by the client.
 - **Rate-limits guessing.** After 10 failed attempts in a minute a client gets `429` with a `Retry-After` for the rest of that window, and one log line rather than one per attempt. The limit is scoped to requests that were going to be refused anyway, so a valid token always gets through — a lockout can't be aimed at you. On Render the client is the address Render's edge observed, not a spoofable `X-Forwarded-For` entry.
