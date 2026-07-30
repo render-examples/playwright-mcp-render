@@ -14,16 +14,19 @@
 #   4. sustained bad tokens keep getting 401, log volume stays bounded, good one works
 #   5. a real browser tool call round-trips (this is the SSE path through the proxy)
 #   6. SIGTERM stops the container promptly and cleanly (the proxy is PID 1)
+#   7. same behavior when RENDER_EXTERNAL_HOSTNAME and X-Forwarded-For are present
 #
 # Run it after bumping the base-image tag — see the README "Rolling Playwright MCP"
 # section. CI runs this same script on every pull request.
 #
 # Usage: ./render-smoke-test.sh
 #   SMOKE_PORT=10000   host port to publish (override if 10000 is taken)
+#   SMOKE_FWD_PORT=…  host port for check 7's second container (default SMOKE_PORT+1)
 #   SMOKE_IMAGE=…      tag to build and run as
 set -euo pipefail
 
 PORT="${SMOKE_PORT:-10000}"
+FWD_PORT="${SMOKE_FWD_PORT:-$((PORT + 1))}"
 IMAGE="${SMOKE_IMAGE:-playwright-mcp-render:smoke}"
 CONTAINER="playwright-mcp-smoke-$$"
 # A fresh token per run, so a stale value can never be what makes this pass.
@@ -31,7 +34,7 @@ TOKEN="$(openssl rand -hex 16)"
 WORKDIR="$(mktemp -d)"
 
 cleanup() {
-  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+  docker rm -f "$CONTAINER" "$CONTAINER-fwd" >/dev/null 2>&1 || true
   rm -rf "$WORKDIR"
 }
 trap cleanup EXIT
@@ -155,6 +158,55 @@ status="$(docker inspect -f '{{.State.ExitCode}}' "$CONTAINER")"
 [ "$status" = "0" ] || fail "container exited $status on SIGTERM, expected 0"
 [ "$elapsed" -lt 10 ] || fail "took ${elapsed}s to stop — SIGTERM was probably not forwarded"
 echo "ok — stopped in ${elapsed}s with exit 0"
+
+step "7. Behaves the same when Render's proxy headers are present"
+# Regression guard. The gate once branched on RENDER_EXTERNAL_HOSTNAME to read a
+# client address out of X-Forwarded-For, and because that variable is unset
+# locally, this suite ran the other branch and never saw the bug. Anything that
+# reads request headers to identify a client must be exercised here, with the
+# variable set and the header forged, or it is untested in the only configuration
+# that ships.
+FWD_CONTAINER="$CONTAINER-fwd"
+docker run -d --name "$FWD_CONTAINER" \
+  -e MCP_TOKEN="$TOKEN" \
+  -e RENDER_EXTERNAL_HOSTNAME=smoke.onrender.com \
+  -p "$FWD_PORT:10000" "$IMAGE" >/dev/null
+for _ in $(seq 60); do
+  curl -sS -o /dev/null "http://127.0.0.1:$FWD_PORT/mcp" 2>/dev/null && break
+  docker inspect -f '{{.State.Running}}' "$FWD_CONTAINER" 2>/dev/null | grep -q true \
+    || fail "forwarded-header container exited during startup:
+$(docker logs "$FWD_CONTAINER" 2>&1)"
+  sleep 1
+done
+# Each request forges a different client address. Under the old per-client scheme
+# these would land in 20 separate buckets and never trip anything; the assertion
+# is simply that every one is refused and the log stays bounded either way.
+for i in $(seq 20); do
+  code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$FWD_PORT/mcp" \
+    -H "X-Forwarded-For: 203.0.113.$i, 10.0.0.$i" \
+    -H 'Authorization: Bearer not-the-token' \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}')"
+  [ "$code" = "401" ] || fail "forged X-Forwarded-For request #$i got $code, expected 401"
+done
+logged="$(docker logs "$FWD_CONTAINER" 2>&1 | grep -c '\[auth\] 401' || true)"
+[ "$logged" -le 10 ] \
+  || fail "20 rejections with rotating X-Forwarded-For produced $logged log lines"
+# And a valid token is unaffected by any of it. Host must match the hostname above,
+# because setting RENDER_EXTERNAL_HOSTNAME also scopes upstream's --allowed-hosts to
+# it (see render-entrypoint.sh) and the gate forwards Host unchanged so that
+# DNS-rebinding check still works. Sending the real Host is what a client on Render
+# does; sending 127.0.0.1 here would earn a 403 from upstream, correctly.
+code="$(curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$FWD_PORT/mcp" \
+  -H 'Host: smoke.onrender.com' \
+  -H 'X-Forwarded-For: 203.0.113.99, 10.0.0.99' \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke-test","version":"1"}}}')"
+[ "$code" = "200" ] || fail "valid token got $code with proxy headers present, expected 200"
+echo "ok — identical behavior with RENDER_EXTERNAL_HOSTNAME set and X-Forwarded-For forged"
 
 echo
 echo "All smoke checks passed."
