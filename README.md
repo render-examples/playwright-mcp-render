@@ -25,7 +25,7 @@ One Render web service runs the official Playwright MCP image behind a bearer-to
 │  MCP client │ ──────────────► │ Render web service  (Docker, standard plan)    │
 │ (Claude,    │  + Bearer       │                                                │
 │  Cursor, …) │    token        │  render-entrypoint.sh                          │
-│             │                 │    │ reads PORT, MCP_TOKEN, allowed hosts      │
+│             │                 │    │ reads PORT, allowed hosts                 │
 │             │  Streamable     │    ▼                                           │
 │             │ ◄────────────── │  render-auth-proxy.mjs   :$PORT  (public)      │
 └─────────────┘   snapshots     │    │ 401 unless the Bearer token matches       │
@@ -44,8 +44,8 @@ One Render web service runs the official Playwright MCP image behind a bearer-to
 | [`render.yaml`](./render.yaml) | Blueprint. Declares the single Docker web service, its plan/region, the `PORT` env var, and the generated `MCP_TOKEN`. This is what the Deploy button reads. |
 | [`Dockerfile.render`](./Dockerfile.render) | Thin wrapper over `mcr.microsoft.com/playwright/mcp` (headless Chromium pre-baked). Adds only the entrypoint and the auth gate — no browser download, no source build. |
 | [`render-entrypoint.sh`](./render-entrypoint.sh) | Reads `PORT`, resolves the allowed-hosts value, then `exec`s the auth gate with the MCP server (bound to loopback) as its argument. |
-| [`render-auth-proxy.mjs`](./render-auth-proxy.mjs) | PID 1. Stdlib-only Node, no dependencies: rejects any request without `Authorization: Bearer $MCP_TOKEN`, forwards the rest to `127.0.0.1:8931`, supervises the MCP server, holds the public port closed until that server accepts, and forwards `SIGTERM`. |
-| [`render-smoke-test.sh`](./render-smoke-test.sh) | Builds the image and checks the wrapper end to end: fails closed without `MCP_TOKEN`, `401` without the header, a handshake and a real browser tool call with it, clean `SIGTERM`. CI runs this on every PR. |
+| [`render-auth-proxy.mjs`](./render-auth-proxy.mjs) | PID 1. Stdlib-only Node, no dependencies: rejects any request without `Authorization: Bearer $MCP_TOKEN` and rate-limits clients that keep guessing, forwards the rest to `127.0.0.1:8931`, supervises the MCP server, holds the public port closed until that server accepts, and forwards `SIGTERM`. |
+| [`render-smoke-test.sh`](./render-smoke-test.sh) | Builds the image and checks the wrapper end to end: fails closed without `MCP_TOKEN`, `401` without the header, `429` after repeated bad ones, a handshake and a real browser tool call with the right one, clean `SIGTERM`. CI runs this on every PR. |
 | [`.env.example`](./.env.example) | Documents the same knobs for running the container locally. |
 
 **Key properties:**
@@ -180,11 +180,12 @@ Upstream ships no authentication in HTTP mode, which is defensible when the serv
 - **Generated secret, not a default.** `render.yaml` uses `generateValue: true`, so every deploy gets its own token and there is no shared credential in this repo to leak.
 - **Constant-time comparison** of SHA-256 digests, so the check doesn't leak the token a byte at a time, and a token prefix is not accepted.
 - **Never logs the token.** Rejections log method, path, and `401` — nothing presented by the client.
+- **Rate-limits guessing.** After 10 failed attempts in a minute a client gets `429` with a `Retry-After` for the rest of that window, and one log line rather than one per attempt. The limit is scoped to requests that were going to be refused anyway, so a valid token always gets through — a lockout can't be aimed at you. On Render the client is the address Render's edge observed, not a spoofable `X-Forwarded-For` entry.
 - **Stops the token at the door.** The `Authorization` header is not forwarded to the MCP server, along with the hop-by-hop headers a proxy is required to drop. Connection upgrades (WebSocket and the like) are answered `501` rather than proxied, since the MCP transport never needs one.
 
 ### What it does not do
 
-This is one door, not defense in depth. It does not sandbox the RCE, rate-limit, or give you per-client identity — everyone who has the token is the same principal. If you can, layer something stronger on top:
+This is one door, not defense in depth. It does not sandbox the RCE, cap what an authenticated caller can do, or give you per-client identity — everyone who has the token is the same principal, and the rate limit above slows guessing, not misuse of a token that already leaked. If you can, layer something stronger on top:
 
 - **Restrict who can reach the service at all.** [Inbound IP rules](https://render.com/docs/inbound-ip-rules) scoped to your known addresses (Scale and Enterprise plans) mean a stolen token isn't usable from anywhere else.
 - **Don't expose it publicly at all.** If your MCP client is another Render service, change `type: web` to `type: pserv` in [`render.yaml`](./render.yaml) to make it a [private service](https://render.com/docs/private-services) — no public URL, strictly safer, and the token still applies. Note it gets no `RENDER_EXTERNAL_HOSTNAME`, so the host check falls back to `*` and the startup banner prints a `localhost` URL; reach it over the private network.
@@ -199,7 +200,7 @@ The version is pinned in exactly one place: the base-image tag in [`Dockerfile.r
 
 Then re-check the two claims in [Security](#security) against the new tag's upstream README: whether `browser_run_code_unsafe` is still a non-opt-in **Core automation** tool, and whether `--caps` still only _adds_ capabilities. Update that section's permalink to the new tag either way — it's the only other place a version literal appears, because a permalink has to carry one.
 
-Then re-verify the gate, since it depends on upstream's HTTP surface: `./render-smoke-test.sh` builds the new image and checks it end to end (`401` without the header, a handshake with it, a real tool call through the SSE path, clean shutdown). CI runs the same script on every PR, so opening one is equivalent. If upstream ever ships real authentication, prefer it and delete `render-auth-proxy.mjs` — this file exists only to fill that gap.
+Then re-verify the gate, since it depends on upstream's HTTP surface: `./render-smoke-test.sh` builds the new image and checks it end to end (`401` without the header, `429` after repeated bad tokens, a handshake with the right one, a real tool call through the SSE path, clean shutdown). CI runs the same script on every PR, so opening one is equivalent. If upstream ever ships real authentication, prefer it and delete `render-auth-proxy.mjs` — this file exists only to fill that gap.
 
 > **Not** a version to keep in sync: the `version` field in `package.json`. This repo is a fork of [microsoft/playwright-mcp](https://github.com/microsoft/playwright-mcp), so that field is upstream's own npm release marker — and the deploy never uses it (`Dockerfile.render` copies only `render-entrypoint.sh` and `render-auth-proxy.mjs`). Expect it to differ from the image tag; leave it alone.
 

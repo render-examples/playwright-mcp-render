@@ -9,10 +9,11 @@
 #
 # Checks, in order:
 #   1. the container refuses to start without MCP_TOKEN (fails closed)
-#   2. a request without the token gets 401
-#   3. a request with it completes an MCP handshake
-#   4. a real browser tool call round-trips (this is the SSE path through the proxy)
-#   5. SIGTERM stops the container promptly and cleanly (the proxy is PID 1)
+#   2. a request with the token completes an MCP handshake
+#   3. a request without it gets 401
+#   4. repeated bad tokens get rate-limited to 429, and a good one still works
+#   5. a real browser tool call round-trips (this is the SSE path through the proxy)
+#   6. SIGTERM stops the container promptly and cleanly (the proxy is PID 1)
 #
 # Run it after bumping the base-image tag — see the README "Rolling Playwright MCP"
 # section. CI runs this same script on every pull request.
@@ -97,7 +98,35 @@ code="$(curl -s -o "$WORKDIR/401.txt" -w '%{http_code}' -X POST "http://127.0.0.
 $(cat "$WORKDIR/401.txt")"
 echo "ok — unauthenticated request got 401"
 
-step "4. Real browser tool call through the proxy"
+step "4. Repeated bad tokens get rate-limited"
+# The gate allows a burst of failures per client and then answers 429 for the rest
+# of the window. Bounded well above that burst so this reports a broken limiter
+# rather than hanging; check 3 already spent one of the allowance.
+attempt() {
+  curl -s -o /dev/null -w '%{http_code}' -X POST "http://127.0.0.1:$PORT/mcp" \
+    -H "Authorization: Bearer $1" \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json, text/event-stream' \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke-test","version":"1"}}}'
+}
+limited=""
+for _ in $(seq 30); do
+  code="$(attempt "not-the-token")"
+  case "$code" in
+    401) ;;
+    429) limited="yes"; break ;;
+    *) fail "bad token got $code, expected 401 or 429" ;;
+  esac
+done
+[ -n "$limited" ] || fail "30 bad tokens in a row never got a 429 — the rate limiter is not engaging"
+echo "ok — bad tokens got 401 until the limit, then 429"
+# The lockout must not extend to the real token: it is scoped to requests that
+# would have been refused anyway, so the operator can always get back in.
+code="$(attempt "$TOKEN")"
+[ "$code" = "200" ] || fail "valid token got $code while the client was rate-limited, expected 200"
+echo "ok — the valid token still gets through"
+
+step "5. Real browser tool call through the proxy"
 mcp() {
   curl -sS --max-time 120 -X POST "http://127.0.0.1:$PORT/mcp" \
     -H "Authorization: Bearer $TOKEN" \
@@ -115,7 +144,7 @@ grep -q 'Page Title: smoke' <<<"$navigate" \
 $navigate"
 echo "ok — Chromium navigated and the snapshot came back through the gate"
 
-step "5. Graceful shutdown on SIGTERM"
+step "6. Graceful shutdown on SIGTERM"
 # Render sends SIGTERM and waits before SIGKILL. If the proxy failed to forward it,
 # docker stop would sit through its own 10s timeout and the exit code would be 137.
 start="$SECONDS"
