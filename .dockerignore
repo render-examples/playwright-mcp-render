@@ -9,6 +9,7 @@ node_modules/
 .devcontainer/
 .claude/
 tests/
+render-smoke-test.sh
 test-results/
 playwright-report/
 sessions/

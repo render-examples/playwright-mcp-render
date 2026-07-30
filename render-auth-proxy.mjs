@@ -119,12 +119,19 @@ const server = http.createServer((req, res) => {
       // indistinguishable from a clean end. Log it and destroy the response so
       // the client sees a truncated transport rather than a silent short read.
       upstreamRes.on('aborted', () => {
+        // Unless the client hung up first: that destroys `res`, and the 'close'
+        // handler below destroys this request, which lands here as an abort. It
+        // is how every SSE session ends normally, so it is not worth a line.
+        if (res.destroyed) return;
         console.error(`[auth] upstream ended the response early: ${req.method} ${req.url}`);
         res.destroy();
       });
     },
   );
   upstream.on('error', err => {
+    // Same as above: a client that disconnected mid-request takes this request
+    // down with it, and that is the client's doing, not upstream's.
+    if (res.destroyed) return;
     console.error(`[auth] upstream error: ${err.message}`);
     // Once headers are out the status is already committed, so a 502 is
     // impossible; writing a body here would append a bogus frame to an in-flight
@@ -165,6 +172,13 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
     server.close();
   });
 }
+
+// Without a handler a failed bind surfaces as an uncaught exception and a stack
+// trace; the cause (usually the port already being in use) is what matters.
+server.on('error', err => {
+  console.error(`[auth] cannot listen on port ${PORT}: ${err.message}`);
+  process.exit(1);
+});
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`[auth] Bearer-token gate listening on 0.0.0.0:${PORT} → 127.0.0.1:${UPSTREAM_PORT}`);

@@ -28,7 +28,7 @@ One Render web service runs the official Playwright MCP image behind a bearer-to
 │             │                 │    │ reads PORT, MCP_TOKEN, allowed hosts      │
 │             │  Streamable     │    ▼                                           │
 │             │ ◄────────────── │  render-auth-proxy.mjs   :$PORT  (public)      │
-└─────────────┘   snapshots     │    │ 401 unless Authorization: Bearer $MCP_TOKEN│
+└─────────────┘   snapshots     │    │ 401 unless the Bearer token matches       │
                                 │    ▼                                           │
                                 │  node /app/cli.js  127.0.0.1:8931  (loopback)  │
                                 │    │                                           │
@@ -45,6 +45,7 @@ One Render web service runs the official Playwright MCP image behind a bearer-to
 | [`Dockerfile.render`](./Dockerfile.render) | Thin wrapper over `mcr.microsoft.com/playwright/mcp` (headless Chromium pre-baked). Adds only the entrypoint and the auth gate — no browser download, no source build. |
 | [`render-entrypoint.sh`](./render-entrypoint.sh) | Reads `PORT`, resolves the allowed-hosts value, then `exec`s the auth gate with the MCP server (bound to loopback) as its argument. |
 | [`render-auth-proxy.mjs`](./render-auth-proxy.mjs) | PID 1. Stdlib-only Node, no dependencies: rejects any request without `Authorization: Bearer $MCP_TOKEN`, forwards the rest to `127.0.0.1:8931`, supervises the MCP server, and forwards `SIGTERM`. |
+| [`render-smoke-test.sh`](./render-smoke-test.sh) | Builds the image and checks the wrapper end to end: fails closed without `MCP_TOKEN`, `401` without the header, a handshake and a real browser tool call with it, clean `SIGTERM`. CI runs this on every PR. |
 | [`.env.example`](./.env.example) | Documents the same knobs for running the container locally. |
 
 **Key properties:**
@@ -198,7 +199,7 @@ The version is pinned in exactly one place: the base-image tag in [`Dockerfile.r
 
 Then re-check the two claims in [Security](#security) against the new tag's upstream README: whether `browser_run_code_unsafe` is still a non-opt-in **Core automation** tool, and whether `--caps` still only _adds_ capabilities. Update that section's permalink to the new tag either way — it's the only other place a version literal appears, because a permalink has to carry one.
 
-Also re-verify the gate after a bump, since it depends on upstream's HTTP surface: a `401` without the header, a `serverInfo` response with it, and a working tool call (which exercises the SSE stream through the proxy). If upstream ever ships real authentication, prefer it and delete `render-auth-proxy.mjs` — this file exists only to fill that gap.
+Then re-verify the gate, since it depends on upstream's HTTP surface: `./render-smoke-test.sh` builds the new image and checks it end to end (`401` without the header, a handshake with it, a real tool call through the SSE path, clean shutdown). CI runs the same script on every PR, so opening one is equivalent. If upstream ever ships real authentication, prefer it and delete `render-auth-proxy.mjs` — this file exists only to fill that gap.
 
 > **Not** a version to keep in sync: the `version` field in `package.json`. This repo is a fork of [microsoft/playwright-mcp](https://github.com/microsoft/playwright-mcp), so that field is upstream's own npm release marker — and the deploy never uses it (`Dockerfile.render` copies only `render-entrypoint.sh` and `render-auth-proxy.mjs`). Expect it to differ from the image tag; leave it alone.
 
